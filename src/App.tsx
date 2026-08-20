@@ -39,6 +39,12 @@ function formatDuration(durationMs: number): string {
   return `${(durationMs / 1000).toFixed(1)} s`;
 }
 
+function providerFailureLabel(error?: string): string {
+  if (/429|too many requests|限流/i.test(error ?? "")) return "限流";
+  if (/403|forbidden|API Key/i.test(error ?? "")) return "鉴权失败";
+  return "失败";
+}
+
 function doiUrl(doi?: string): string | undefined {
   return doi ? `https://doi.org/${doi}` : undefined;
 }
@@ -250,7 +256,7 @@ export default function App() {
             {session.diagnostics.map((item) => (
               <span className={`provider-status provider-status--${item.status}`} title={item.error} key={item.provider}>
                 {item.status === "success" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-                {sourceNames[item.provider]} · {item.status === "success" ? `${item.resultCount} 条 / ${formatDuration(item.durationMs)}` : item.status === "timeout" ? "超时" : "失败"}
+                {sourceNames[item.provider]} · {item.status === "success" ? `${item.resultCount} 条 / ${formatDuration(item.durationMs)}` : item.status === "timeout" ? "超时" : providerFailureLabel(item.error)}
               </span>
             ))}
           </div>

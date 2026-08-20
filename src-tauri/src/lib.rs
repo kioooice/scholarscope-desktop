@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
 use reqwest::Url;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -534,14 +534,41 @@ async fn agent_fetch_scholarly_text(url: String, headers: Option<Vec<FetchHeader
         return Err("Host is not on ScholarScope's scholarly provider allowlist".to_string());
     }
 
-    scholarly_client()?
+    let response = scholarly_client()?
         .get(url)
         .headers(request_headers(headers)?)
         .send()
         .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let retry_after = response
+            .headers()
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let detail = response
+            .text()
+            .await
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(240)
+            .collect::<String>();
+        let mut message = format!("Provider request failed: {status}");
+        if let Some(retry_after) = retry_after {
+            message.push_str(&format!("; retry-after={retry_after}"));
+        }
+        if !detail.is_empty() {
+            message.push_str(&format!("; {detail}"));
+        }
+        return Err(message);
+    }
+
+    response
         .text()
         .await
         .map_err(|error| error.to_string())
