@@ -767,6 +767,7 @@ fn load_notes(app: AppHandle) -> CommandResult<Vec<AthenaNote>> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             initialize_database,
             clear_saved_research_data,

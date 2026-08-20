@@ -13,6 +13,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, searchLiterature } from "./services/unifiedSearchService";
 import type { SearchFilters, SearchSource } from "./types/athena";
 import type { SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
@@ -49,6 +51,21 @@ function authorLine(paper: UnifiedPaper): string {
 
 function SourceChip({ source }: { source: SearchSource }) {
   return <span className="source-chip">{sourceNames[source]}</span>;
+}
+
+function ExternalAction({ url, className, children }: { url: string; className?: string; children: ReactNode }) {
+  function handleClick() {
+    void openExternalUrl(url).catch((openError) => {
+      console.error("Failed to open external URL", openError);
+      window.alert("无法打开链接，请检查 Windows 默认浏览器设置后重试。");
+    });
+  }
+
+  return (
+    <button className={className} type="button" onClick={handleClick}>
+      {children}
+    </button>
+  );
 }
 
 function PaperRow({ paper, active, onSelect }: { paper: UnifiedPaper; active: boolean; onSelect: () => void }) {
@@ -118,9 +135,9 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
           <div className="section-title"><ShieldCheck size={17} /><h2>来源核验</h2></div>
           <div className="source-stack">
             {paper.sourceProviders.filter((source) => paper.sourceUrls[source]).map((source) => (
-              <a href={paper.sourceUrls[source]} target="_blank" rel="noreferrer" key={source}>
+              <ExternalAction url={paper.sourceUrls[source]!} key={source}>
                 <SourceChip source={source} /><span>查看该平台记录</span><ArrowUpRight size={14} />
-              </a>
+              </ExternalAction>
             ))}
           </div>
           {paper.mergeWarnings.map((warning) => <p className="warning-text" key={warning}>{warning}</p>)}
@@ -128,9 +145,9 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
       </div>
 
       <div className="preview-actions">
-        {publisherUrl && <a className="button button--primary" href={publisherUrl} target="_blank" rel="noreferrer">查看出版页面 <ExternalLink size={15} /></a>}
-        {openUrl && <a className="button" href={openUrl} target="_blank" rel="noreferrer">查看开放页面 <ExternalLink size={15} /></a>}
-        {doiUrl(paper.doi) && <a className="button" href={doiUrl(paper.doi)} target="_blank" rel="noreferrer">打开 DOI <ExternalLink size={15} /></a>}
+        {publisherUrl && <ExternalAction className="button button--primary" url={publisherUrl}>查看出版页面 <ExternalLink size={15} /></ExternalAction>}
+        {openUrl && <ExternalAction className="button" url={openUrl}>查看开放页面 <ExternalLink size={15} /></ExternalAction>}
+        {doiUrl(paper.doi) && <ExternalAction className="button" url={doiUrl(paper.doi)!}>打开 DOI <ExternalLink size={15} /></ExternalAction>}
       </div>
     </aside>
   );
@@ -199,7 +216,6 @@ export default function App() {
           <div className="brand-mark"><Search size={20} /></div>
           <div><strong>ScholarScope</strong><span>全球文献发现 · 技术验证版</span></div>
         </div>
-        <div className="header-note"><ShieldCheck size={16} />只查看记录与合法页面，不代替全文获取</div>
       </header>
 
       <section className="search-zone">

@@ -16,6 +16,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.101.0",
     "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "clsx": "^2.1.1",
     "cytoscape": "^3.34.0",
     "date-fns": "^4.4.0",

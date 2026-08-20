@@ -57,12 +57,11 @@ input:focus-visible {
 
 .brand,
 .brand > div:last-child,
-.header-note,
 .session-bar > div,
 .section-title,
 .preview-kicker,
 .preview-actions,
-.source-stack a {
+.source-stack button {
   display: flex;
   align-items: center;
 }
@@ -93,14 +92,9 @@ input:focus-visible {
   letter-spacing: 0.01em;
 }
 
-.brand span,
-.header-note {
+.brand span {
   color: #aeb8cc;
   font-size: 12px;
-}
-
-.header-note {
-  gap: 7px;
 }
 
 .search-zone {
@@ -516,24 +510,27 @@ kbd {
   margin-top: 10px;
 }
 
-.source-stack a {
+.source-stack button {
+  width: 100%;
   gap: 8px;
   padding: 8px 10px;
   color: #40506a;
   font-size: 11px;
+  text-align: left;
   text-decoration: none;
   background: #f7f9fc;
   border: 1px solid #e2e7ee;
   border-radius: 8px;
+  cursor: pointer;
 }
 
-.source-stack a:hover {
+.source-stack button:hover {
   color: #234ecf;
   background: #f1f5ff;
   border-color: #cbd8ff;
 }
 
-.source-stack a > span:nth-child(2) {
+.source-stack button > span:nth-child(2) {
   flex: 1;
 }
 
@@ -657,7 +654,6 @@ kbd {
     grid-template-columns: 52% 48%;
   }
 
-  .header-note,
   .keyboard-hint,
   kbd {
     display: none;
