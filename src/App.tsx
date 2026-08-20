@@ -18,6 +18,8 @@ import { checkChinesePlatforms } from "./services/chinesePlatformService";
 import type { ChinesePlatformResult } from "./services/chinesePlatformService";
 import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, searchLiterature } from "./services/unifiedSearchService";
+import { openAccessFallbackLinks, unpaywallService } from "./services/unpaywallService";
+import type { OpenAccessLookupResult } from "./services/unpaywallService";
 import type { SearchFilters, SearchSource } from "./types/athena";
 import type { SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
 
@@ -130,6 +132,12 @@ function PaperRow({ paper, active, onSelect }: { paper: UnifiedPaper; active: bo
 }
 
 function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
+  const [accessLookup, setAccessLookup] = useState<{
+    paperId: string;
+    status: "idle" | "checking" | "done" | "error";
+    result?: OpenAccessLookupResult;
+  }>({ paperId: "", status: "idle" });
+
   if (!paper) {
     return (
       <aside className="preview-panel preview-panel--empty">
@@ -141,7 +149,22 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
   }
 
   const publisherUrl = paper.publisherUrl || paper.sourceUrls.OpenAlex || paper.sourceUrls.Crossref || paper.sourceUrls["Semantic Scholar"];
-  const openUrl = paper.oaUrl && !paper.oaUrl.toLowerCase().endsWith(".pdf") ? paper.oaUrl : undefined;
+  const knownOpenUrl = paper.oaUrl || (paper.isOpenAccess ? paper.pdfUrl : undefined);
+  const currentLookup = accessLookup.paperId === paper.id
+    ? accessLookup
+    : { paperId: paper.id, status: "idle" as const };
+  const fallbackLinks = openAccessFallbackLinks(paper);
+  const locatedOpenUrl = currentLookup.result?.status === "found" ? currentLookup.result.url : undefined;
+
+  async function findOpenAccess(targetPaper: UnifiedPaper) {
+    setAccessLookup({ paperId: targetPaper.id, status: "checking" });
+    try {
+      const result = await unpaywallService.findOpenAccessVersion(targetPaper);
+      setAccessLookup({ paperId: targetPaper.id, status: "done", result });
+    } catch {
+      setAccessLookup({ paperId: targetPaper.id, status: "error" });
+    }
+  }
 
   return (
     <aside className="preview-panel">
@@ -149,7 +172,7 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
         <div className="preview-kicker">
           <span>{paper.year ?? "年份未知"}</span>
           <span>被引 {paper.citationCount}</span>
-          {paper.isOpenAccess && <span className="oa-badge">开放获取</span>}
+          {(paper.isOpenAccess || locatedOpenUrl) && <span className="oa-badge">开放获取</span>}
         </div>
         <h1>{paper.title}</h1>
         <p className="preview-authors">{authorLine(paper)}</p>
@@ -190,7 +213,20 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
 
       <div className="preview-actions">
         {publisherUrl && <ExternalAction className="button button--primary" url={publisherUrl}>查看出版页面 <ExternalLink size={15} /></ExternalAction>}
-        {openUrl && <ExternalAction className="button" url={openUrl}>查看开放页面 <ExternalLink size={15} /></ExternalAction>}
+        {knownOpenUrl && <ExternalAction className="button" url={knownOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
+        {!knownOpenUrl && locatedOpenUrl && <ExternalAction className="button" url={locatedOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
+        {!knownOpenUrl && currentLookup.status === "idle" && (
+          <button className="button" type="button" onClick={() => void findOpenAccess(paper)}>查找开放版本 <Search size={15} /></button>
+        )}
+        {!knownOpenUrl && currentLookup.status === "checking" && (
+          <button className="button" type="button" disabled>正在查找 <LoaderCircle className="spin" size={15} /></button>
+        )}
+        {!knownOpenUrl && currentLookup.status === "done" && currentLookup.result?.status === "not-found" && fallbackLinks.map((link) => (
+          <ExternalAction className="button" url={link.url} key={link.provider}>到 {link.provider} 检索 <ExternalLink size={15} /></ExternalAction>
+        ))}
+        {!knownOpenUrl && currentLookup.status === "error" && fallbackLinks.map((link) => (
+          <ExternalAction className="button" url={link.url} key={link.provider}>到 {link.provider} 检索 <ExternalLink size={15} /></ExternalAction>
+        ))}
         {doiUrl(paper.doi) && <ExternalAction className="button" url={doiUrl(paper.doi)!}>打开 DOI <ExternalLink size={15} /></ExternalAction>}
       </div>
     </aside>

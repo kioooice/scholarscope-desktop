@@ -570,6 +570,12 @@ kbd {
   font-size: 11px;
 }
 
+.preview-actions .button:disabled {
+  color: #8490a2;
+  cursor: wait;
+  background: #f3f5f8;
+}
+
 .preview-panel--empty,
 .empty-state,
 .start-state__intro {

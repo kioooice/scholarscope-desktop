@@ -1,8 +1,11 @@
 import type { AlternativePaper, Paper } from "../types/athena";
+import { loadProviderSettings } from "./providerSettingsService";
+import { fetchScholarlyJson } from "./scholarlyFetch";
 
 type UnpaywallBestLocation = {
   url?: string;
   url_for_pdf?: string;
+  url_for_landing_page?: string;
   host_type?: string;
   license?: string;
 };
@@ -17,15 +20,80 @@ type UnpaywallResult = {
   year?: number;
 };
 
-const UNPAYWALL_EMAIL = "athena.scholar@example.com";
+export type OpenAccessLookupResult = {
+  status: "found" | "not-found";
+  provider: "Unpaywall";
+  url?: string;
+  isPdf?: boolean;
+  license?: string;
+  reason?: "missing-doi" | "not-open";
+};
+
+export type OpenAccessFallbackLink = {
+  provider: "CORE" | "BASE";
+  url: string;
+};
+
+const DEFAULT_UNPAYWALL_EMAIL = "scholarscope.desktop@example.com";
+const CACHE_TTL_MS = 30 * 60 * 1000;
+const lookupCache = new Map<string, { expiresAt: number; result: OpenAccessLookupResult }>();
+
+function cleanDoi(value: string): string {
+  return value.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").trim().toLowerCase();
+}
+
+function unpaywallEmail(): string {
+  return loadProviderSettings().crossrefEmail.trim() || DEFAULT_UNPAYWALL_EMAIL;
+}
+
+function bestOpenUrl(location?: UnpaywallBestLocation): string | undefined {
+  return location?.url_for_pdf || location?.url_for_landing_page || location?.url;
+}
+
+export function openAccessFallbackLinks(paper: Pick<Paper, "title" | "doi">): OpenAccessFallbackLink[] {
+  const query = [`"${paper.title}"`, paper.doi].filter(Boolean).join(" ");
+  return [
+    { provider: "CORE", url: `https://core.ac.uk/search?q=${encodeURIComponent(query)}` },
+    { provider: "BASE", url: `https://www.base-search.net/Search/Results?lookfor=${encodeURIComponent(query)}&type=all&oaboost=1` },
+  ];
+}
 
 export const unpaywallService = {
   async lookupByDoi(doi: string): Promise<UnpaywallResult | null> {
-    const cleanDoi = doi.replace(/^https?:\/\/doi\.org\//i, "");
-    const response = await fetch(`https://api.unpaywall.org/v2/${encodeURIComponent(cleanDoi)}?email=${UNPAYWALL_EMAIL}`);
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`Unpaywall lookup failed: ${response.status}`);
-    return response.json();
+    const normalizedDoi = cleanDoi(doi);
+    try {
+      return await fetchScholarlyJson<UnpaywallResult>(
+        `https://api.unpaywall.org/v2/${encodeURIComponent(normalizedDoi)}?email=${encodeURIComponent(unpaywallEmail())}`,
+      );
+    } catch (error) {
+      if (error instanceof Error && /404|not found/i.test(error.message)) return null;
+      throw error;
+    }
+  },
+
+  async findOpenAccessVersion(paper: Pick<Paper, "doi">): Promise<OpenAccessLookupResult> {
+    if (!paper.doi) {
+      return { status: "not-found", provider: "Unpaywall", reason: "missing-doi" };
+    }
+
+    const doi = cleanDoi(paper.doi);
+    const cached = lookupCache.get(doi);
+    if (cached && cached.expiresAt > Date.now()) return cached.result;
+
+    const payload = await this.lookupByDoi(doi);
+    const url = bestOpenUrl(payload?.best_oa_location);
+    const result: OpenAccessLookupResult = payload?.is_oa && url
+      ? {
+          status: "found",
+          provider: "Unpaywall",
+          url,
+          isPdf: Boolean(payload.best_oa_location?.url_for_pdf && url === payload.best_oa_location.url_for_pdf),
+          license: payload.best_oa_location?.license,
+        }
+      : { status: "not-found", provider: "Unpaywall", reason: "not-open" };
+
+    lookupCache.set(doi, { expiresAt: Date.now() + CACHE_TTL_MS, result });
+    return result;
   },
 
   async toAlternative(paper: Paper): Promise<AlternativePaper | null> {
@@ -41,7 +109,7 @@ export const unpaywallService = {
       title: result.title || paper.title,
       source: "Unpaywall",
       coverageEstimate: result.doi?.toLowerCase() === paper.doi.toLowerCase() ? 100 : 85,
-      openAccessLink: result.best_oa_location.url_for_pdf || result.best_oa_location.url,
+      openAccessLink: bestOpenUrl(result.best_oa_location),
       doi: result.doi,
       authors,
       year: result.year,
