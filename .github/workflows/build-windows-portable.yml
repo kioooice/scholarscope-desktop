@@ -1,0 +1,86 @@
+name: Build Windows Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-windows-portable.yml"
+      - "PORTABLE_README.txt"
+      - "package.json"
+      - "package-lock.json"
+      - "src/**"
+      - "src-tauri/**"
+      - "index.html"
+      - "vite.config.ts"
+      - "tsconfig*.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-portable:
+    name: Build portable ZIP
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build Tauri executable
+        run: npm run tauri:build -- --no-bundle
+
+      - name: Assemble portable folder
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portableDir = Join-Path $env:GITHUB_WORKSPACE "portable"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+
+          $candidates = @(
+            "src-tauri/target/release/athena-scholar.exe",
+            "src-tauri/target/release/scholarscope.exe"
+          )
+          $executable = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $executable) {
+            Get-ChildItem "src-tauri/target/release" -Filter "*.exe" -Recurse
+            throw "Tauri executable was not found."
+          }
+
+          Copy-Item $executable (Join-Path $portableDir "ScholarScope.exe")
+          Copy-Item "PORTABLE_README.txt" (Join-Path $portableDir "使用说明.txt")
+
+          $hash = (Get-FileHash (Join-Path $portableDir "ScholarScope.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ScholarScope.exe" | Set-Content (Join-Path $portableDir "SHA256SUMS.txt") -Encoding ascii
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScholarScope-portable-win64
+          path: portable/*
+          if-no-files-found: error
+          retention-days: 30
