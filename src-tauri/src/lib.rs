@@ -319,6 +319,7 @@ fn is_allowed_scholarly_host(url: &Url) -> bool {
         url.host_str(),
         Some("api.openalex.org")
             | Some("api.crossref.org")
+            | Some("www.bing.com")
             | Some("eutils.ncbi.nlm.nih.gov")
             | Some("api.semanticscholar.org")
             | Some("export.arxiv.org")

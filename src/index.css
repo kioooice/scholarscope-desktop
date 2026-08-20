@@ -530,6 +530,23 @@ kbd {
   border-color: #cbd8ff;
 }
 
+.source-chip--chinese {
+  color: #28734c;
+  background: #e6f6ed;
+  border-color: #c8e8d5;
+}
+
+.source-chip--checking {
+  color: #6f7d91;
+  background: #f3f5f8;
+}
+
+.source-chip--unavailable {
+  color: #9a672a;
+  background: #fff2de;
+  border-color: #f0dab8;
+}
+
 .source-stack button > span:nth-child(2) {
   flex: 1;
 }
@@ -664,6 +681,7 @@ kbd {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
 }
 
 @media (max-width: 760px) {

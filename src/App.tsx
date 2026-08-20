@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { checkChinesePlatforms } from "./services/chinesePlatformService";
+import type { ChinesePlatformResult } from "./services/chinesePlatformService";
 import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, searchLiterature } from "./services/unifiedSearchService";
 import type { SearchFilters, SearchSource } from "./types/athena";
@@ -74,6 +76,40 @@ function ExternalAction({ url, className, children }: { url: string; className?:
   );
 }
 
+const chinesePlatformNames = {
+  cnki: "知网",
+  wanfang: "万方",
+  cqvip: "维普",
+};
+
+function ChinesePlatformChips({ paper }: { paper: UnifiedPaper }) {
+  const [results, setResults] = useState<ChinesePlatformResult[]>();
+
+  useEffect(() => {
+    let active = true;
+    void checkChinesePlatforms(paper.title).then((nextResults) => {
+      if (active) setResults(nextResults);
+    });
+    return () => { active = false; };
+  }, [paper.title]);
+
+  if (!results) return <span className="source-chip source-chip--checking">中文平台查询中</span>;
+
+  const found = results.filter((item) => item.status === "found");
+  if (found.length) {
+    return found.map((item) => (
+      <span className="source-chip source-chip--chinese" title={item.detail} key={item.key}>{chinesePlatformNames[item.key]}</span>
+    ));
+  }
+
+  const unavailable = results.some((item) => item.status === "unavailable");
+  return (
+    <span className="source-chip source-chip--unavailable" title="未检出不等于未收录，必要时仍可到平台按题名确认">
+      {unavailable ? "中文平台待确认" : "三平台未检出"}
+    </span>
+  );
+}
+
 function PaperRow({ paper, active, onSelect }: { paper: UnifiedPaper; active: boolean; onSelect: () => void }) {
   return (
     <button className={`paper-row${active ? " paper-row--active" : ""}`} type="button" onClick={onSelect}>
@@ -87,6 +123,7 @@ function PaperRow({ paper, active, onSelect }: { paper: UnifiedPaper; active: bo
       </div>
       <div className="paper-row__sources">
         {paper.sourceProviders.map((source) => <SourceChip source={source} key={source} />)}
+        <ChinesePlatformChips paper={paper} />
       </div>
     </button>
   );
@@ -148,6 +185,7 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
           </div>
           {paper.mergeWarnings.map((warning) => <p className="warning-text" key={warning}>{warning}</p>)}
         </section>
+
       </div>
 
       <div className="preview-actions">
