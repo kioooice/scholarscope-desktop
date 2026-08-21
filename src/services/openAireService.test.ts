@@ -63,4 +63,11 @@ describe("OpenAIRE provider", () => {
       pdfUrl: "https://repository.example/paper.pdf",
     });
   });
+
+  it("skips the incompatible keyword endpoint for Chinese queries", async () => {
+    const papers = await openAireService.searchWorks({ ...request, query: "碱性无氰镀锌" });
+
+    expect(papers).toEqual([]);
+    expect(mocks.fetchScholarlyJson).not.toHaveBeenCalled();
+  });
 });

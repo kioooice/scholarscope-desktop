@@ -71,7 +71,7 @@ function SourceChip({ source }: { source: SearchSource }) {
 }
 
 function shouldShowChinesePlatforms(paper: UnifiedPaper, query: string): boolean {
-  return containsChineseText(query) && (containsChineseText(paper.title) || identifyChinesePlatforms(paper).length > 0);
+  return containsChineseText(paper.title) || (containsChineseText(query) && identifyChinesePlatforms(paper).length > 0);
 }
 
 function ExternalAction({ url, className, children }: { url: string; className?: string; children: ReactNode }) {
@@ -98,10 +98,10 @@ function ChinesePlatformChips({ paper, enabled }: { paper: UnifiedPaper; enabled
     return (
       <span
         className={`source-chip ${matched ? "source-chip--chinese" : "source-chip--unavailable"}`}
-        title={matched ? `已识别到${target.label}记录` : `未识别到${target.label}记录，可按题名检索`}
+        title={matched ? `已识别到${target.label}记录` : `暂未识别到${target.label}记录，可按题名确认`}
         key={target.key}
       >
-        {matched ? `${target.label}记录` : `${target.label}检索`}
+        {matched ? `${target.label}记录` : `${target.label}待确认`}
       </span>
     );
   });
@@ -154,6 +154,21 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
     return () => { active = false; };
   }, [paper?.abstract, paper?.doi, paper?.id]);
 
+  useEffect(() => {
+    if (!paper || showChinesePlatforms) return;
+    const knownOpenUrl = paper.oaUrl || (paper.isOpenAccess ? paper.pdfUrl : undefined);
+    if (knownOpenUrl) return;
+
+    let active = true;
+    void unpaywallService.findOpenAccessVersion(paper).then((result) => {
+      if (active) setAccessLookup({ paperId: paper.id, status: "done", result });
+    }).catch(() => {
+      if (active) setAccessLookup({ paperId: paper.id, status: "error" });
+    });
+
+    return () => { active = false; };
+  }, [paper, showChinesePlatforms]);
+
   if (!paper) {
     return (
       <aside className="preview-panel preview-panel--empty">
@@ -166,10 +181,10 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
 
   const publisherUrl = paper.publisherUrl || paper.sourceUrls.OpenAlex || paper.sourceUrls.Crossref || paper.sourceUrls.OpenAIRE || paper.sourceUrls["Semantic Scholar"];
   const knownOpenUrl = paper.oaUrl || (paper.isOpenAccess ? paper.pdfUrl : undefined);
+  const fallbackLinks = openAccessFallbackLinks(paper);
   const currentLookup = accessLookup.paperId === paper.id
     ? accessLookup
-    : { paperId: paper.id, status: "idle" as const };
-  const fallbackLinks = openAccessFallbackLinks(paper);
+    : { paperId: paper.id, status: knownOpenUrl || showChinesePlatforms ? "done" as const : "checking" as const };
   const locatedOpenUrl = currentLookup.result?.status === "found" ? currentLookup.result.url : undefined;
   const abstract = abstractLookup.paperId === paper.id && abstractLookup.status === "found"
     ? abstractLookup.abstract ?? paper.abstract
@@ -179,16 +194,6 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
     : { paperId: paper.id, status: paper.doi && isPlaceholderAbstract(paper.abstract) ? "checking" as const : "idle" as const };
   const chineseTargets = showChinesePlatforms ? buildChinesePlatformTargets(paper.title) : [];
   const identifiedChinesePlatforms = identifyChinesePlatforms(paper);
-
-  async function findOpenAccess(targetPaper: UnifiedPaper) {
-    setAccessLookup({ paperId: targetPaper.id, status: "checking" });
-    try {
-      const result = await unpaywallService.findOpenAccessVersion(targetPaper);
-      setAccessLookup({ paperId: targetPaper.id, status: "done", result });
-    } catch {
-      setAccessLookup({ paperId: targetPaper.id, status: "error" });
-    }
-  }
 
   return (
     <aside className="preview-panel">
@@ -226,20 +231,20 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
 
         {showChinesePlatforms && (
           <section className="preview-section">
-            <div className="section-title"><Database size={17} /><h2>中文平台入口</h2></div>
+            <div className="section-title"><Database size={17} /><h2>中文平台归属</h2></div>
             <div className="source-stack">
               {chineseTargets.map((target) => {
                 const matched = identifiedChinesePlatforms.find((item) => item.key === target.key);
                 return (
                   <ExternalAction url={matched?.recordUrl ?? target.searchUrl} key={target.key}>
                     <span className={`source-chip ${matched ? "source-chip--chinese" : "source-chip--unavailable"}`}>{target.label}</span>
-                    <span>{matched ? "打开已识别记录" : "按题名检索"}</span>
+                    <span>{matched ? "打开已识别记录" : "按题名确认"}</span>
                     <ArrowUpRight size={14} />
                   </ExternalAction>
                 );
               })}
             </div>
-            <p className="muted platform-note">平台收录和下载权限以打开后的平台页面为准。</p>
+            <p className="muted platform-note">这里用于判断收录在哪个平台；打开后可在你有权限的平台内查看或下载。</p>
           </section>
         )}
 
@@ -259,18 +264,18 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
 
       <div className="preview-actions">
         {publisherUrl && <ExternalAction className="button button--primary" url={publisherUrl}>查看出版页面 <ExternalLink size={15} /></ExternalAction>}
-        {knownOpenUrl && <ExternalAction className="button" url={knownOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
-        {!knownOpenUrl && locatedOpenUrl && <ExternalAction className="button" url={locatedOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
-        {!knownOpenUrl && currentLookup.status === "idle" && (
-          <button className="button" type="button" onClick={() => void findOpenAccess(paper)}>查找开放版本 <Search size={15} /></button>
+        {!showChinesePlatforms && knownOpenUrl && <ExternalAction className="button" url={knownOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
+        {!showChinesePlatforms && !knownOpenUrl && locatedOpenUrl && <ExternalAction className="button" url={locatedOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
+        {!showChinesePlatforms && !knownOpenUrl && currentLookup.status === "checking" && (
+          <span className="button button--pending">正在检查开放版本 <LoaderCircle className="spin" size={15} /></span>
         )}
-        {!knownOpenUrl && currentLookup.status === "checking" && (
-          <button className="button" type="button" disabled>正在查找 <LoaderCircle className="spin" size={15} /></button>
+        {!showChinesePlatforms && !knownOpenUrl && currentLookup.status === "done" && currentLookup.result?.status === "not-found" && (
+          <>
+            <span className="access-fallback-note">未找到开放版本，继续检索：</span>
+            {fallbackLinks.map((link) => <ExternalAction className="button" url={link.url} key={link.provider}>到 {link.provider} 检索 <ExternalLink size={15} /></ExternalAction>)}
+          </>
         )}
-        {!knownOpenUrl && currentLookup.status === "done" && currentLookup.result?.status === "not-found" && fallbackLinks.map((link) => (
-          <ExternalAction className="button" url={link.url} key={link.provider}>到 {link.provider} 检索 <ExternalLink size={15} /></ExternalAction>
-        ))}
-        {!knownOpenUrl && currentLookup.status === "error" && fallbackLinks.map((link) => (
+        {!showChinesePlatforms && !knownOpenUrl && currentLookup.status === "error" && fallbackLinks.map((link) => (
           <ExternalAction className="button" url={link.url} key={link.provider}>到 {link.provider} 检索 <ExternalLink size={15} /></ExternalAction>
         ))}
         {doiUrl(paper.doi) && <ExternalAction className="button" url={doiUrl(paper.doi)!}>打开 DOI <ExternalLink size={15} /></ExternalAction>}

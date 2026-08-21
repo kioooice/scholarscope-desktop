@@ -208,6 +208,10 @@ function endpoint(): string {
 
 export const openAireService = {
   async searchWorks(request: SearchRequest): Promise<Paper[]> {
+    // OpenAIRE's keyword parser currently rejects Han-character keyword queries.
+    // Chinese records use the dedicated platform handoff in the main UI instead.
+    if (request.type !== "doi" && /\p{Script=Han}/u.test(request.query)) return [];
+
     const params = new URLSearchParams({ format: "json", page: "1", size: "12" });
     if (request.type === "doi") {
       params.set("doi", cleanDoi(request.query));

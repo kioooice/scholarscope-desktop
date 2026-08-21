@@ -654,6 +654,19 @@ kbd {
   background: #f3f5f8;
 }
 
+.preview-actions .button--pending {
+  color: #8490a2;
+  cursor: wait;
+  background: #f3f5f8;
+  border-color: #dce2eb;
+}
+
+.access-fallback-note {
+  flex-basis: 100%;
+  color: #7b8799;
+  font-size: 11px;
+}
+
 .preview-panel--empty,
 .empty-state,
 .start-state__intro {

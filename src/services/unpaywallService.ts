@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { AlternativePaper, Paper, SearchRequest } from "../types/athena";
+import { googleScholarService } from "./googleScholarService";
 import { loadProviderSettings } from "./providerSettingsService";
 import { fetchScholarlyJson } from "./scholarlyFetch";
 
@@ -31,7 +32,7 @@ export type OpenAccessLookupResult = {
 };
 
 export type OpenAccessFallbackLink = {
-  provider: "CORE" | "BASE";
+  provider: "CORE" | "BASE" | "Google Scholar";
   url: string;
 };
 
@@ -60,6 +61,7 @@ export function openAccessFallbackLinks(paper: Pick<Paper, "title" | "doi">): Op
   return [
     { provider: "CORE", url: `https://core.ac.uk/search?q=${encodeURIComponent(query)}` },
     { provider: "BASE", url: `https://www.base-search.net/Search/Results?lookfor=${encodeURIComponent(query)}&type=all&oaboost=1` },
+    { provider: "Google Scholar", url: googleScholarService.searchLink(query).url },
   ];
 }
 
