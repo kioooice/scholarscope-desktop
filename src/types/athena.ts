@@ -1,5 +1,5 @@
 export type SearchType = "topic" | "title" | "doi" | "author" | "keywords";
-export type SearchSource = "OpenAlex" | "Unpaywall" | "arXiv" | "Crossref" | "PubMed" | "Semantic Scholar" | "Google Scholar";
+export type SearchSource = "OpenAlex" | "OpenAIRE" | "Unpaywall" | "arXiv" | "Crossref" | "PubMed" | "Semantic Scholar" | "Google Scholar";
 
 export type GraphNodeType =
   | "Paper"

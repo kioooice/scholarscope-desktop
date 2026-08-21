@@ -102,11 +102,13 @@ function mapWork(work: CrossrefWork): Paper {
 
 export const crossrefService = {
   async searchWorks(request: SearchRequest): Promise<Paper[]> {
-    const params = new URLSearchParams({
-      rows: "12",
-      sort: "relevance",
-      "query.bibliographic": providerQuery(request),
-    });
+    const params = new URLSearchParams({ rows: "12", sort: "relevance" });
+    if (request.type === "doi") {
+      const doi = request.query.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").trim();
+      params.set("filter", `doi:${doi}`);
+    } else {
+      params.set("query.bibliographic", providerQuery(request));
+    }
     const { crossrefEmail } = loadProviderSettings();
     if (crossrefEmail.trim()) params.set("mailto", crossrefEmail.trim());
     const filter = buildFilter(request);

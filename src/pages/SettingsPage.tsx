@@ -115,15 +115,7 @@ export function SettingsPage() {
           <h2>Research provider access</h2>
           <p>These are optional. They improve rate limits or prepare paid provider access, and are stored locally on this computer.</p>
           <div className="settings-controls settings-controls--stacked">
-            <label className="text-control">
-              <span>Semantic Scholar API key</span>
-              <input
-                type="password"
-                value={providerSettings.semanticScholarApiKey}
-                onChange={(event) => updateProviderSettings({ semanticScholarApiKey: event.target.value })}
-                placeholder="Optional, helps avoid 429 rate limits"
-              />
-            </label>
+            <p className="muted">主搜索链路使用 OpenAlex、Crossref 和 OpenAIRE；Unpaywall 在 DOI 查询中定位合法开放版本，不需要单独的 API Key。</p>
             <label className="text-control">
               <span>NCBI / PubMed API key</span>
               <input

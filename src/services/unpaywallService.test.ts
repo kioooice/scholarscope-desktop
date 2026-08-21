@@ -53,6 +53,16 @@ describe("open-access lookup", () => {
     expect(mocks.fetchScholarlyJson).not.toHaveBeenCalled();
   });
 
+  it("does not call Unpaywall without a configured contact email", async () => {
+    mocks.loadProviderSettings.mockReturnValue({ crossrefEmail: "" });
+
+    await expect(unpaywallService.findOpenAccessVersion({ doi: "10.1234/example.closed" })).resolves.toMatchObject({
+      status: "not-found",
+      reason: "missing-email",
+    });
+    expect(mocks.fetchScholarlyJson).not.toHaveBeenCalled();
+  });
+
   it("builds only CORE and BASE fallback searches", () => {
     const links = openAccessFallbackLinks({ title: "A precise paper title", doi: "10.1000/test" });
 

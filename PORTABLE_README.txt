@@ -11,7 +11,7 @@ ScholarScope Windows 便携版
 --------
 - Windows 10 或 Windows 11（64 位）
 - Microsoft Edge WebView2 Runtime
-- 可以访问 OpenAlex、Crossref 和 Semantic Scholar
+- 可以访问 OpenAlex、Crossref、OpenAIRE 和 Unpaywall
 
 大多数 Windows 10/11 电脑已经安装 WebView2。如果程序无法启动，请先通过微软官方渠道安装 WebView2 Runtime。
 
@@ -28,5 +28,5 @@ ScholarScope Windows 便携版
 
 当前限制
 --------
-- Semantic Scholar 匿名接口可能出现限流；发生时程序会保留其他数据源结果。
+- Unpaywall 需要在数据源设置中填写真实联系邮箱；未设置时会保留其他数据源结果。
 - 本版本没有代码签名、自动更新和安装程序。

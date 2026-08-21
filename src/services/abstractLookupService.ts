@@ -1,23 +1,8 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { parseOpenAireAbstract, type OpenAireResponse } from "./openAireService";
 import { fetchScholarlyJson } from "./scholarlyFetch";
 
-type OpenAireValue = { $?: string } | string;
-
-type OpenAireResponse = {
-  response?: {
-    results?: {
-      result?: Array<{
-        metadata?: {
-          "oaf:entity"?: {
-            "oaf:result"?: {
-              description?: OpenAireValue | OpenAireValue[];
-            };
-          };
-        };
-      }>;
-    };
-  };
-};
+export { parseOpenAireAbstract } from "./openAireService";
 
 export type AbstractLookupResult = {
   status: "found" | "not-found";
@@ -30,30 +15,6 @@ const lookupCache = new Map<string, Promise<AbstractLookupResult>>();
 export function isPlaceholderAbstract(value?: string): boolean {
   const normalized = value?.trim().toLowerCase() ?? "";
   return !normalized || normalized.startsWith("no abstract") || normalized.includes("abstract was provided");
-}
-
-function cleanAbstract(value?: string): string | undefined {
-  const cleaned = value
-    ?.replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;|&#160;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;|&#34;/gi, String.fromCharCode(34))
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s+/gu, " ")
-    .trim();
-  return cleaned || undefined;
-}
-
-function valueText(value?: OpenAireValue): string | undefined {
-  return typeof value === "string" ? value : value?.$;
-}
-
-export function parseOpenAireAbstract(data: OpenAireResponse): string | undefined {
-  const description = data.response?.results?.result?.[0]?.metadata?.["oaf:entity"]?.["oaf:result"]?.description;
-  const values = Array.isArray(description) ? description : [description];
-  return values.map(valueText).map(cleanAbstract).find(Boolean);
 }
 
 function lookupUrl(doi: string): string {

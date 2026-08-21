@@ -33,6 +33,7 @@ const defaultFilters: SearchFilters = {
 
 const sourceNames: Record<SearchSource, string> = {
   OpenAlex: "OpenAlex",
+  OpenAIRE: "OpenAIRE",
   Crossref: "Crossref",
   "Semantic Scholar": "Semantic Scholar",
   Unpaywall: "Unpaywall",
@@ -48,6 +49,8 @@ function formatDuration(durationMs: number): string {
 
 function providerFailureLabel(error?: string): string {
   if (/未配置|未启用/i.test(error ?? "")) return "未启用";
+  if (/仅对 DOI|仅 DOI/i.test(error ?? "")) return "仅 DOI";
+  if (/联系邮箱/i.test(error ?? "")) return "需邮箱";
   if (/429|too many requests|限流/i.test(error ?? "")) return "限流";
   if (/403|forbidden|API Key/i.test(error ?? "")) return "鉴权失败";
   return "失败";
@@ -161,7 +164,7 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
     );
   }
 
-  const publisherUrl = paper.publisherUrl || paper.sourceUrls.OpenAlex || paper.sourceUrls.Crossref || paper.sourceUrls["Semantic Scholar"];
+  const publisherUrl = paper.publisherUrl || paper.sourceUrls.OpenAlex || paper.sourceUrls.Crossref || paper.sourceUrls.OpenAIRE || paper.sourceUrls["Semantic Scholar"];
   const knownOpenUrl = paper.oaUrl || (paper.isOpenAccess ? paper.pdfUrl : undefined);
   const currentLookup = accessLookup.paperId === paper.id
     ? accessLookup
@@ -326,7 +329,7 @@ export default function App() {
       setSession(nextSession);
       setSelectedIndex(0);
       setHistory(loadSearchHistory());
-      if (!nextSession.rawResultCount) setError("三个数据源均未返回结果，请调整检索词后重试。");
+      if (!nextSession.rawResultCount) setError("四个主渠道均未返回结果，请调整检索词后重试。");
     } catch (searchError) {
       setError(searchError instanceof Error ? searchError.message : "检索失败");
     } finally {
@@ -334,8 +337,8 @@ export default function App() {
     }
   }
 
-  function updateSemanticScholarApiKey(value: string) {
-    const nextSettings = saveProviderSettings({ ...providerSettings, semanticScholarApiKey: value });
+  function updateContactEmail(value: string) {
+    const nextSettings = saveProviderSettings({ ...providerSettings, crossrefEmail: value });
     setProviderSettings(nextSettings);
   }
 
@@ -358,16 +361,18 @@ export default function App() {
           </button>
           {showProviderSettings && (
             <div className="provider-settings-popover">
+              <strong>当前主搜索链路</strong>
+              <p>OpenAlex、Crossref、OpenAIRE；输入 DOI 时再由 Unpaywall 定位合法开放版本。</p>
               <label>
-                <span>Semantic Scholar API Key</span>
+                <span>联系邮箱（Crossref / Unpaywall）</span>
                 <input
-                  type="password"
-                  value={providerSettings.semanticScholarApiKey}
-                  onChange={(event) => updateSemanticScholarApiKey(event.target.value)}
-                  placeholder="可选，配置后启用 Semantic Scholar"
+                  type="email"
+                  value={providerSettings.crossrefEmail}
+                  onChange={(event) => updateContactEmail(event.target.value)}
+                  placeholder="填写真实邮箱后启用 Unpaywall"
                 />
               </label>
-              <p>未配置时不会请求匿名接口，避免 429 限流。</p>
+              <p>Unpaywall 要求使用真实联系邮箱，邮箱只保存在本机设置中。</p>
             </div>
           )}
         </div>
@@ -400,7 +405,7 @@ export default function App() {
         <section className="session-bar">
           <div><strong>{session.mergedResultCount}</strong> 条统一结果<span>由 {session.rawResultCount} 条原始记录合并</span></div>
           <div><Clock3 size={14} />{session.cacheHit ? "缓存命中" : formatDuration(session.durationMs)}</div>
-          <div><Database size={14} />{successfulProviders}/3 数据源可用</div>
+          <div><Database size={14} />{successfulProviders}/4 主渠道可用</div>
           <div className="provider-statuses">
             {session.diagnostics.map((item) => (
               <span className={`provider-status provider-status--${item.status}`} title={item.error} key={item.provider}>
@@ -417,11 +422,11 @@ export default function App() {
       <main className="workspace">
         <section className="results-panel">
           {loading && !session && (
-            <div className="empty-state"><LoaderCircle className="spin" size={34} /><h2>正在并行检索三个平台</h2><p>结果会合并 DOI、标题、作者和开放获取信息。</p></div>
+            <div className="empty-state"><LoaderCircle className="spin" size={34} /><h2>正在检索四个主渠道</h2><p>结果会合并 DOI、标题、作者、摘要和开放获取信息。</p></div>
           )}
           {!loading && !session && (
             <div className="start-state">
-              <div className="start-state__intro"><FileSearch size={36} /><h1>从一个入口查看全球文献记录</h1><p>OpenAlex 负责广覆盖，Crossref 核验 DOI 与出版信息；Semantic Scholar 配置 API Key 后提供可选增强。</p></div>
+              <div className="start-state__intro"><FileSearch size={36} /><h1>从一个入口查看全球文献记录</h1><p>OpenAlex 负责广覆盖，Crossref 核验出版信息，OpenAIRE 补充摘要；DOI 查询由 Unpaywall 定位合法开放版本。</p></div>
               {history.length > 0 && (
                 <div className="history-block">
                   <div className="section-title"><History size={17} /><h2>最近检索</h2></div>

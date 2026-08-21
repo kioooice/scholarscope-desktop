@@ -198,7 +198,7 @@ export function SearchCenter() {
         <div>
           <span className="eyebrow">Research agent</span>
           <h2>Live scholarly answer</h2>
-          <p>Athena searches OpenAlex, Crossref, PubMed, Semantic Scholar and arXiv, checks Unpaywall, ranks sources, then answers from returned paper records.</p>
+          <p>Athena searches OpenAlex, Crossref, OpenAIRE and specialist sources, checks Unpaywall for legal OA versions, ranks sources, then answers from returned paper records.</p>
         </div>
         <div className="agent-steps">
           {agentSteps.map((step) => (

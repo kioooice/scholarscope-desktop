@@ -3,11 +3,11 @@ import { arxivService } from "./arxivService";
 import { crossrefService } from "./crossrefService";
 import { googleScholarService } from "./googleScholarService";
 import { openAlexService } from "./openAlexService";
+import { openAireService } from "./openAireService";
 import { getPaperDownloadUrl, getPaperLandingUrl } from "./paperLinks";
 import { loadProviderSettings } from "./providerSettingsService";
 import { assessPaperQuality } from "./qualityAssessmentService";
 import { pubMedService } from "./pubMedService";
-import { semanticScholarService } from "./semanticScholarService";
 import { unpaywallService } from "./unpaywallService";
 import type { AgentStep, AlternativePaper, EvidenceStance, ExternalSearchLink, Paper, QualityStatus, ResearchAgentAnswer, ResearchAgentResult, SearchRequest } from "../types/athena";
 
@@ -17,8 +17,8 @@ const baseSteps: AgentStep[] = [
   { id: "ai-expand", label: "AI semantic query expansion", status: "pending" },
   { id: "openalex", label: "Query OpenAlex works index", status: "pending" },
   { id: "crossref", label: "Query Crossref metadata", status: "pending" },
+  { id: "openaire", label: "Query OpenAIRE records", status: "pending" },
   { id: "pubmed", label: "Query PubMed records", status: "pending" },
-  { id: "semantic", label: "Query Semantic Scholar graph", status: "pending" },
   { id: "arxiv", label: "Query arXiv preprints", status: "pending" },
   { id: "google-scholar", label: "Prepare Google Scholar search", status: "pending" },
   { id: "oa", label: "Check legal open-access records", status: "pending" },
@@ -403,6 +403,15 @@ export const researchAgentService = {
       steps = emit(updateStep(steps, "crossref", "error", error instanceof Error ? error.message : "Crossref failed"), onStep);
     }
 
+    steps = emit(updateStep(steps, "openaire", "running"), onStep);
+    try {
+      const openAirePapers = await openAireService.searchWorks(providerRequest);
+      papers.push(...openAirePapers);
+      steps = emit(updateStep(steps, "openaire", "done", `${openAirePapers.length} records returned`), onStep);
+    } catch (error) {
+      steps = emit(updateStep(steps, "openaire", "error", error instanceof Error ? error.message : "OpenAIRE failed"), onStep);
+    }
+
     steps = emit(updateStep(steps, "pubmed", "running"), onStep);
     try {
       const pubMedPapers = await pubMedService.searchWorks(providerRequest);
@@ -410,15 +419,6 @@ export const researchAgentService = {
       steps = emit(updateStep(steps, "pubmed", "done", `${pubMedPapers.length} records returned`), onStep);
     } catch (error) {
       steps = emit(updateStep(steps, "pubmed", "error", error instanceof Error ? error.message : "PubMed failed"), onStep);
-    }
-
-    steps = emit(updateStep(steps, "semantic", "running"), onStep);
-    try {
-      const semanticPapers = await semanticScholarService.searchWorks(providerRequest);
-      papers.push(...semanticPapers);
-      steps = emit(updateStep(steps, "semantic", "done", `${semanticPapers.length} papers returned`), onStep);
-    } catch (error) {
-      steps = emit(updateStep(steps, "semantic", "error", error instanceof Error ? error.message : "Semantic Scholar failed"), onStep);
     }
 
     steps = emit(updateStep(steps, "arxiv", "running"), onStep);

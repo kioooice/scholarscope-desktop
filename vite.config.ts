@@ -11,6 +11,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/openaire/, ''),
       },
+      '/api/unpaywall': {
+        target: 'https://api.unpaywall.org',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/unpaywall/, ''),
+      },
     },
   },
 })

@@ -2,9 +2,10 @@ import type { Paper, SearchFilters, SearchRequest, SearchSource } from "../types
 import type { ProviderDiagnostic, SearchHistoryEntry, SearchSession, UnifiedPaper } from "../types/search";
 import { crossrefService } from "./crossrefService";
 import { openAlexService } from "./openAlexService";
+import { openAireService } from "./openAireService";
 import { isPlaceholderAbstract } from "./abstractLookupService";
 import { loadProviderSettings } from "./providerSettingsService";
-import { semanticScholarService } from "./semanticScholarService";
+import { unpaywallService } from "./unpaywallService";
 
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const PROVIDER_TIMEOUT_MS = 15_000;
@@ -14,18 +15,19 @@ const cache = new Map<string, { expiresAt: number; session: SearchSession }>();
 type Provider = {
   name: SearchSource;
   search: (request: SearchRequest) => Promise<Paper[]>;
-  isEnabled?: () => boolean;
+  isEnabled?: (request: SearchRequest) => boolean;
   disabledReason?: string;
 };
 
 const providers: Provider[] = [
   { name: "OpenAlex", search: (request) => openAlexService.searchWorks(request) },
   { name: "Crossref", search: (request) => crossrefService.searchWorks(request) },
+  { name: "OpenAIRE", search: (request) => openAireService.searchWorks(request) },
   {
-    name: "Semantic Scholar",
-    search: (request) => semanticScholarService.searchWorks(request),
-    isEnabled: () => Boolean(loadProviderSettings().semanticScholarApiKey.trim()),
-    disabledReason: "未配置 API Key，已暂停匿名请求",
+    name: "Unpaywall",
+    search: (request) => unpaywallService.searchWorks(request),
+    isEnabled: (request) => request.type === "doi" && Boolean(loadProviderSettings().crossrefEmail.trim()),
+    disabledReason: "需要在数据源设置中填写真实联系邮箱",
   },
 ];
 
@@ -59,6 +61,8 @@ function preferredAbstract(left: string, right: string): string {
 function sourceUrl(paper: Paper): string | undefined {
   if (paper.sourceProvider === "OpenAlex" && paper.openalexId) return paper.openalexId;
   if (paper.sourceProvider === "Crossref" && paper.doi) return `https://doi.org/${cleanDoi(paper.doi)}`;
+  if (paper.sourceProvider === "OpenAIRE" && paper.doi) return `https://doi.org/${cleanDoi(paper.doi)}`;
+  if (paper.sourceProvider === "Unpaywall") return paper.oaUrl || paper.pdfUrl;
   if (paper.publisherUrl) return paper.publisherUrl;
   if (paper.doi) return `https://doi.org/${cleanDoi(paper.doi)}`;
   return paper.openalexId;
@@ -157,7 +161,8 @@ function cacheKey(query: string, filters: SearchFilters): string {
   return JSON.stringify({
     query: normalizeTitle(query),
     filters,
-    semanticScholarEnabled: Boolean(loadProviderSettings().semanticScholarApiKey.trim()),
+    providerPipeline: "openalex-crossref-openaire-unpaywall-v1",
+    unpaywallConfigured: Boolean(loadProviderSettings().crossrefEmail.trim()),
   });
 }
 
@@ -218,7 +223,7 @@ export async function searchLiterature(query: string, filters: SearchFilters): P
     providers.map(async (provider) => {
       const providerStarted = performance.now();
       try {
-        if (provider.isEnabled && !provider.isEnabled()) {
+        if (provider.isEnabled && !provider.isEnabled(request)) {
           return {
             papers: [] as Paper[],
             diagnostic: {

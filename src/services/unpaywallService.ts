@@ -1,4 +1,5 @@
-import type { AlternativePaper, Paper } from "../types/athena";
+import { isTauri } from "@tauri-apps/api/core";
+import type { AlternativePaper, Paper, SearchRequest } from "../types/athena";
 import { loadProviderSettings } from "./providerSettingsService";
 import { fetchScholarlyJson } from "./scholarlyFetch";
 
@@ -26,7 +27,7 @@ export type OpenAccessLookupResult = {
   url?: string;
   isPdf?: boolean;
   license?: string;
-  reason?: "missing-doi" | "not-open";
+  reason?: "missing-doi" | "missing-email" | "not-open";
 };
 
 export type OpenAccessFallbackLink = {
@@ -34,7 +35,6 @@ export type OpenAccessFallbackLink = {
   url: string;
 };
 
-const DEFAULT_UNPAYWALL_EMAIL = "scholarscope.desktop@example.com";
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const lookupCache = new Map<string, { expiresAt: number; result: OpenAccessLookupResult }>();
 
@@ -43,7 +43,12 @@ function cleanDoi(value: string): string {
 }
 
 function unpaywallEmail(): string {
-  return loadProviderSettings().crossrefEmail.trim() || DEFAULT_UNPAYWALL_EMAIL;
+  return loadProviderSettings().crossrefEmail.trim();
+}
+
+function lookupEndpoint(doi: string): string {
+  const path = `/v2/${encodeURIComponent(doi)}`;
+  return isTauri() ? `https://api.unpaywall.org${path}` : `/api/unpaywall${path}`;
 }
 
 function bestOpenUrl(location?: UnpaywallBestLocation): string | undefined {
@@ -61,9 +66,11 @@ export function openAccessFallbackLinks(paper: Pick<Paper, "title" | "doi">): Op
 export const unpaywallService = {
   async lookupByDoi(doi: string): Promise<UnpaywallResult | null> {
     const normalizedDoi = cleanDoi(doi);
+    const email = unpaywallEmail();
+    if (!email) return null;
     try {
       return await fetchScholarlyJson<UnpaywallResult>(
-        `https://api.unpaywall.org/v2/${encodeURIComponent(normalizedDoi)}?email=${encodeURIComponent(unpaywallEmail())}`,
+        `${lookupEndpoint(normalizedDoi)}?email=${encodeURIComponent(email)}`,
       );
     } catch (error) {
       if (error instanceof Error && /404|not found/i.test(error.message)) return null;
@@ -74,6 +81,9 @@ export const unpaywallService = {
   async findOpenAccessVersion(paper: Pick<Paper, "doi">): Promise<OpenAccessLookupResult> {
     if (!paper.doi) {
       return { status: "not-found", provider: "Unpaywall", reason: "missing-doi" };
+    }
+    if (!unpaywallEmail()) {
+      return { status: "not-found", provider: "Unpaywall", reason: "missing-email" };
     }
 
     const doi = cleanDoi(paper.doi);
@@ -96,8 +106,39 @@ export const unpaywallService = {
     return result;
   },
 
+  async searchWorks(request: SearchRequest): Promise<Paper[]> {
+    if (request.type !== "doi" || !unpaywallEmail()) return [];
+    const result = await this.lookupByDoi(request.query);
+    const url = bestOpenUrl(result?.best_oa_location);
+    if (!result?.is_oa || !result.doi || !url) return [];
+
+    const doi = cleanDoi(result.doi);
+    const authors = result.z_authors?.map((author) => [author.given, author.family].filter(Boolean).join(" ")).filter(Boolean) as string[] ?? [];
+    const isPdf = Boolean(result.best_oa_location?.url_for_pdf && url === result.best_oa_location.url_for_pdf);
+    return [{
+      id: `unpaywall:${doi}`,
+      doi,
+      title: result.title || `Open-access version for ${doi}`,
+      authors,
+      abstract: "No abstract was provided by Unpaywall for this work.",
+      year: result.year,
+      publisher: result.best_oa_location?.host_type || "Open-access repository",
+      citationCount: 0,
+      publisherUrl: url,
+      oaUrl: url,
+      pdfUrl: isPdf ? url : undefined,
+      isOpenAccess: true,
+      sourceProvider: "Unpaywall",
+      concepts: [],
+      topics: [],
+      keywords: [],
+      references: [],
+      relatedPapers: [],
+    }];
+  },
+
   async toAlternative(paper: Paper): Promise<AlternativePaper | null> {
-    if (!paper.doi) return null;
+    if (!paper.doi || !unpaywallEmail()) return null;
     const result = await this.lookupByDoi(paper.doi);
     if (!result?.is_oa || !result.best_oa_location) return null;
 
