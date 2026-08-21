@@ -17,7 +17,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { abstractLookupService, isPlaceholderAbstract } from "./services/abstractLookupService";
-import { buildChinesePlatformTargets, containsChineseText, identifyChinesePlatforms } from "./services/chinesePlatformService";
+import { containsChineseText, identifyChinesePlatforms } from "./services/chinesePlatformService";
 import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, searchLiterature } from "./services/unifiedSearchService";
 import { loadProviderSettings, saveProviderSettings } from "./services/providerSettingsService";
@@ -91,20 +91,12 @@ function ExternalAction({ url, className, children }: { url: string; className?:
 
 function ChinesePlatformChips({ paper, enabled }: { paper: UnifiedPaper; enabled: boolean }) {
   if (!enabled) return null;
-  const targets = buildChinesePlatformTargets(paper.title);
   const identified = identifyChinesePlatforms(paper);
-  return targets.map((target) => {
-    const matched = identified.find((item) => item.key === target.key);
-    return (
-      <span
-        className={`source-chip ${matched ? "source-chip--chinese" : "source-chip--unavailable"}`}
-        title={matched ? `已识别到${target.label}记录` : `暂未识别到${target.label}记录，可按题名确认`}
-        key={target.key}
-      >
-        {matched ? `${target.label}记录` : `${target.label}待确认`}
-      </span>
-    );
-  });
+  return identified.map((platform) => (
+    <span className="source-chip source-chip--chinese" title={`已确认${platform.label}记录`} key={platform.key}>
+      {platform.label}记录
+    </span>
+  ));
 }
 
 function PaperRow({ paper, active, onSelect, showChinesePlatforms }: { paper: UnifiedPaper; active: boolean; onSelect: () => void; showChinesePlatforms: boolean }) {
@@ -192,7 +184,6 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
   const currentAbstractLookup = abstractLookup.paperId === paper.id
     ? abstractLookup
     : { paperId: paper.id, status: paper.doi && isPlaceholderAbstract(paper.abstract) ? "checking" as const : "idle" as const };
-  const chineseTargets = showChinesePlatforms ? buildChinesePlatformTargets(paper.title) : [];
   const identifiedChinesePlatforms = identifyChinesePlatforms(paper);
 
   return (
@@ -229,22 +220,19 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
           </section>
         )}
 
-        {showChinesePlatforms && (
+        {showChinesePlatforms && identifiedChinesePlatforms.length > 0 && (
           <section className="preview-section">
             <div className="section-title"><Database size={17} /><h2>中文平台归属</h2></div>
             <div className="source-stack">
-              {chineseTargets.map((target) => {
-                const matched = identifiedChinesePlatforms.find((item) => item.key === target.key);
-                return (
-                  <ExternalAction url={matched?.recordUrl ?? target.searchUrl} key={target.key}>
-                    <span className={`source-chip ${matched ? "source-chip--chinese" : "source-chip--unavailable"}`}>{target.label}</span>
-                    <span>{matched ? "打开已识别记录" : "按题名确认"}</span>
-                    <ArrowUpRight size={14} />
-                  </ExternalAction>
-                );
-              })}
+              {identifiedChinesePlatforms.map((platform) => (
+                <ExternalAction url={platform.recordUrl} key={platform.key}>
+                  <span className="source-chip source-chip--chinese">{platform.label}</span>
+                  <span>打开已确认记录</span>
+                  <ArrowUpRight size={14} />
+                </ExternalAction>
+              ))}
             </div>
-            <p className="muted platform-note">这里用于判断收录在哪个平台；打开后可在你有权限的平台内查看或下载。</p>
+            <p className="muted platform-note">这里只显示已经确认的收录平台；打开后可在你有权限的平台内查看或下载。</p>
           </section>
         )}
 
