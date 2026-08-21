@@ -614,6 +614,12 @@ kbd {
   border-color: #c8e8d5;
 }
 
+.source-chip--journal {
+  color: #315d9d;
+  background: #edf3ff;
+  border-color: #d1def8;
+}
+
 .source-chip--checking {
   color: #6f7d91;
   background: #f3f5f8;

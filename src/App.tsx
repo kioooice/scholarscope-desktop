@@ -17,7 +17,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { abstractLookupService, isPlaceholderAbstract } from "./services/abstractLookupService";
-import { containsChineseText, identifyChinesePlatforms } from "./services/chinesePlatformService";
+import { buildChinesePlatformLinks, containsChineseText } from "./services/chinesePlatformService";
 import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, searchLiterature } from "./services/unifiedSearchService";
 import { loadProviderSettings, saveProviderSettings } from "./services/providerSettingsService";
@@ -71,7 +71,7 @@ function SourceChip({ source }: { source: SearchSource }) {
 }
 
 function shouldShowChinesePlatforms(paper: UnifiedPaper, query: string): boolean {
-  return containsChineseText(paper.title) || (containsChineseText(query) && identifyChinesePlatforms(paper).length > 0);
+  return (containsChineseText(paper.title) || containsChineseText(query)) && buildChinesePlatformLinks(paper, query).length > 0;
 }
 
 function ExternalAction({ url, className, children }: { url: string; className?: string; children: ReactNode }) {
@@ -89,17 +89,17 @@ function ExternalAction({ url, className, children }: { url: string; className?:
   );
 }
 
-function ChinesePlatformChips({ paper, enabled }: { paper: UnifiedPaper; enabled: boolean }) {
+function ChinesePlatformChips({ paper, query, enabled }: { paper: UnifiedPaper; query: string; enabled: boolean }) {
   if (!enabled) return null;
-  const identified = identifyChinesePlatforms(paper);
-  return identified.map((platform) => (
-    <span className="source-chip source-chip--chinese" title={`已确认${platform.label}记录`} key={platform.key}>
-      {platform.label}记录
+  const links = buildChinesePlatformLinks(paper, query);
+  return links.map((link) => (
+    <span className={`source-chip ${link.matchType === "record" ? "source-chip--chinese" : "source-chip--journal"}`} title={link.matchType === "record" ? `已确认${link.label}记录` : `按${link.label}期刊检索`} key={link.key}>
+      {link.label}{link.matchType === "record" ? "记录" : "期刊"}
     </span>
   ));
 }
 
-function PaperRow({ paper, active, onSelect, showChinesePlatforms }: { paper: UnifiedPaper; active: boolean; onSelect: () => void; showChinesePlatforms: boolean }) {
+function PaperRow({ paper, query, active, onSelect, showChinesePlatforms }: { paper: UnifiedPaper; query: string; active: boolean; onSelect: () => void; showChinesePlatforms: boolean }) {
   return (
     <button className={`paper-row${active ? " paper-row--active" : ""}`} type="button" onClick={onSelect}>
       <div className="paper-row__title">{paper.title}</div>
@@ -112,13 +112,13 @@ function PaperRow({ paper, active, onSelect, showChinesePlatforms }: { paper: Un
       </div>
       <div className="paper-row__sources">
         {paper.sourceProviders.map((source) => <SourceChip source={source} key={source} />)}
-        <ChinesePlatformChips paper={paper} enabled={showChinesePlatforms} />
+        <ChinesePlatformChips paper={paper} query={query} enabled={showChinesePlatforms} />
       </div>
     </button>
   );
 }
 
-function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; showChinesePlatforms: boolean }) {
+function PaperPreview({ paper, query, showChinesePlatforms }: { paper?: UnifiedPaper; query: string; showChinesePlatforms: boolean }) {
   const [accessLookup, setAccessLookup] = useState<{
     paperId: string;
     status: "idle" | "checking" | "done" | "error";
@@ -184,7 +184,7 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
   const currentAbstractLookup = abstractLookup.paperId === paper.id
     ? abstractLookup
     : { paperId: paper.id, status: paper.doi && isPlaceholderAbstract(paper.abstract) ? "checking" as const : "idle" as const };
-  const identifiedChinesePlatforms = identifyChinesePlatforms(paper);
+  const chinesePlatformLinks = buildChinesePlatformLinks(paper, query);
 
   return (
     <aside className="preview-panel">
@@ -220,19 +220,19 @@ function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; s
           </section>
         )}
 
-        {showChinesePlatforms && identifiedChinesePlatforms.length > 0 && (
+        {showChinesePlatforms && chinesePlatformLinks.length > 0 && (
           <section className="preview-section">
-            <div className="section-title"><Database size={17} /><h2>中文平台归属</h2></div>
+            <div className="section-title"><Database size={17} /><h2>中文平台检索</h2></div>
             <div className="source-stack">
-              {identifiedChinesePlatforms.map((platform) => (
-                <ExternalAction url={platform.recordUrl} key={platform.key}>
-                  <span className="source-chip source-chip--chinese">{platform.label}</span>
-                  <span>打开已确认记录</span>
+              {chinesePlatformLinks.map((link) => (
+                <ExternalAction url={link.url} key={link.key}>
+                  <span className={`source-chip ${link.matchType === "record" ? "source-chip--chinese" : "source-chip--journal"}`}>{link.label}</span>
+                  <span>{link.matchType === "record" ? "打开已确认记录" : "按题名和期刊检索"}</span>
                   <ArrowUpRight size={14} />
                 </ExternalAction>
               ))}
             </div>
-            <p className="muted platform-note">这里只显示已经确认的收录平台；打开后可在你有权限的平台内查看或下载。</p>
+            <p className="muted platform-note">已有平台记录会直接打开；其余入口已按题名和期刊缩小检索范围。</p>
           </section>
         )}
 
@@ -429,9 +429,9 @@ export default function App() {
             </div>
           )}
           {session && papers.length === 0 && !loading && <div className="empty-state"><FileSearch size={34} /><h2>没有可显示的结果</h2><p>可以减少限定词、关闭“仅开放获取”，或改用英文关键词。</p></div>}
-          {papers.map((paper, index) => <PaperRow paper={paper} active={index === selectedIndex} showChinesePlatforms={shouldShowChinesePlatforms(paper, session?.query ?? "")} onSelect={() => setSelectedIndex(index)} key={`${paper.id}-${index}`} />)}
+          {papers.map((paper, index) => <PaperRow paper={paper} query={session?.query ?? ""} active={index === selectedIndex} showChinesePlatforms={shouldShowChinesePlatforms(paper, session?.query ?? "")} onSelect={() => setSelectedIndex(index)} key={`${paper.id}-${index}`} />)}
         </section>
-        <PaperPreview paper={selectedPaper} showChinesePlatforms={selectedPaper ? shouldShowChinesePlatforms(selectedPaper, session?.query ?? "") : false} />
+        <PaperPreview paper={selectedPaper} query={session?.query ?? ""} showChinesePlatforms={selectedPaper ? shouldShowChinesePlatforms(selectedPaper, session?.query ?? "") : false} />
       </main>
     </div>
   );
