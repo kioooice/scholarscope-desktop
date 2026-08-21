@@ -46,6 +46,7 @@ input:focus-visible {
 }
 
 .app-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -289,6 +290,72 @@ kbd {
   border-color: #f1d0ce;
 }
 
+.header-actions {
+  position: relative;
+}
+
+.icon-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: #c7d2ea;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.provider-settings-popover {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  z-index: 5;
+  width: 310px;
+  padding: 13px;
+  color: #35445b;
+  background: #fff;
+  border: 1px solid #d5dce7;
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(20, 36, 66, 0.16);
+}
+
+.provider-settings-popover label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.provider-settings-popover input {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  color: #26334a;
+  background: #f8fafc;
+  border: 1px solid #d5dce7;
+  border-radius: 6px;
+  outline: 0;
+}
+
+.provider-settings-popover p {
+  margin: 8px 0 0;
+  color: #7b8799;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.provider-status--disabled {
+  color: #69778b !important;
+  background: #f1f4f8;
+  border-color: #dce2ea;
+}
+
 .error-banner {
   display: flex;
   align-items: center;
@@ -487,6 +554,17 @@ kbd {
 
 .preview-section > p.muted {
   color: #919bac;
+}
+
+.preview-section > p.abstract-status,
+.preview-section > p.abstract-source,
+.preview-section > p.platform-note {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.preview-section > p.abstract-source {
+  color: #33724f;
 }
 
 .topic-list {

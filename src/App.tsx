@@ -8,16 +8,19 @@ import {
   FileSearch,
   History,
   LoaderCircle,
+  MinusCircle,
   Search,
+  Settings2,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { checkChinesePlatforms } from "./services/chinesePlatformService";
-import type { ChinesePlatformResult } from "./services/chinesePlatformService";
+import { abstractLookupService, isPlaceholderAbstract } from "./services/abstractLookupService";
+import { buildChinesePlatformTargets, containsChineseText, identifyChinesePlatforms } from "./services/chinesePlatformService";
 import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, searchLiterature } from "./services/unifiedSearchService";
+import { loadProviderSettings, saveProviderSettings } from "./services/providerSettingsService";
 import { openAccessFallbackLinks, unpaywallService } from "./services/unpaywallService";
 import type { OpenAccessLookupResult } from "./services/unpaywallService";
 import type { SearchFilters, SearchSource } from "./types/athena";
@@ -44,6 +47,7 @@ function formatDuration(durationMs: number): string {
 }
 
 function providerFailureLabel(error?: string): string {
+  if (/未配置|未启用/i.test(error ?? "")) return "未启用";
   if (/429|too many requests|限流/i.test(error ?? "")) return "限流";
   if (/403|forbidden|API Key/i.test(error ?? "")) return "鉴权失败";
   return "失败";
@@ -63,6 +67,10 @@ function SourceChip({ source }: { source: SearchSource }) {
   return <span className="source-chip">{sourceNames[source]}</span>;
 }
 
+function shouldShowChinesePlatforms(paper: UnifiedPaper, query: string): boolean {
+  return containsChineseText(query) && (containsChineseText(paper.title) || identifyChinesePlatforms(paper).length > 0);
+}
+
 function ExternalAction({ url, className, children }: { url: string; className?: string; children: ReactNode }) {
   function handleClick() {
     void openExternalUrl(url).catch((openError) => {
@@ -78,41 +86,25 @@ function ExternalAction({ url, className, children }: { url: string; className?:
   );
 }
 
-const chinesePlatformNames = {
-  cnki: "知网",
-  wanfang: "万方",
-  cqvip: "维普",
-};
-
-function ChinesePlatformChips({ paper }: { paper: UnifiedPaper }) {
-  const [results, setResults] = useState<ChinesePlatformResult[]>();
-
-  useEffect(() => {
-    let active = true;
-    void checkChinesePlatforms(paper.title).then((nextResults) => {
-      if (active) setResults(nextResults);
-    });
-    return () => { active = false; };
-  }, [paper.title]);
-
-  if (!results) return <span className="source-chip source-chip--checking">中文平台查询中</span>;
-
-  const found = results.filter((item) => item.status === "found");
-  if (found.length) {
-    return found.map((item) => (
-      <span className="source-chip source-chip--chinese" title={item.detail} key={item.key}>{chinesePlatformNames[item.key]}</span>
-    ));
-  }
-
-  const unavailable = results.some((item) => item.status === "unavailable");
-  return (
-    <span className="source-chip source-chip--unavailable" title="未检出不等于未收录，必要时仍可到平台按题名确认">
-      {unavailable ? "中文平台待确认" : "三平台未检出"}
-    </span>
-  );
+function ChinesePlatformChips({ paper, enabled }: { paper: UnifiedPaper; enabled: boolean }) {
+  if (!enabled) return null;
+  const targets = buildChinesePlatformTargets(paper.title);
+  const identified = identifyChinesePlatforms(paper);
+  return targets.map((target) => {
+    const matched = identified.find((item) => item.key === target.key);
+    return (
+      <span
+        className={`source-chip ${matched ? "source-chip--chinese" : "source-chip--unavailable"}`}
+        title={matched ? `已识别到${target.label}记录` : `未识别到${target.label}记录，可按题名检索`}
+        key={target.key}
+      >
+        {matched ? `${target.label}记录` : `${target.label}检索`}
+      </span>
+    );
+  });
 }
 
-function PaperRow({ paper, active, onSelect }: { paper: UnifiedPaper; active: boolean; onSelect: () => void }) {
+function PaperRow({ paper, active, onSelect, showChinesePlatforms }: { paper: UnifiedPaper; active: boolean; onSelect: () => void; showChinesePlatforms: boolean }) {
   return (
     <button className={`paper-row${active ? " paper-row--active" : ""}`} type="button" onClick={onSelect}>
       <div className="paper-row__title">{paper.title}</div>
@@ -125,18 +117,39 @@ function PaperRow({ paper, active, onSelect }: { paper: UnifiedPaper; active: bo
       </div>
       <div className="paper-row__sources">
         {paper.sourceProviders.map((source) => <SourceChip source={source} key={source} />)}
-        <ChinesePlatformChips paper={paper} />
+        <ChinesePlatformChips paper={paper} enabled={showChinesePlatforms} />
       </div>
     </button>
   );
 }
 
-function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
+function PaperPreview({ paper, showChinesePlatforms }: { paper?: UnifiedPaper; showChinesePlatforms: boolean }) {
   const [accessLookup, setAccessLookup] = useState<{
     paperId: string;
     status: "idle" | "checking" | "done" | "error";
     result?: OpenAccessLookupResult;
   }>({ paperId: "", status: "idle" });
+  const [abstractLookup, setAbstractLookup] = useState<{
+    paperId: string;
+    status: "idle" | "checking" | "found" | "not-found" | "error";
+    abstract?: string;
+  }>({ paperId: "", status: "idle" });
+
+  useEffect(() => {
+    if (!paper?.doi || !isPlaceholderAbstract(paper.abstract)) return;
+    let active = true;
+    void abstractLookupService.findByDoi(paper.doi).then((result) => {
+      if (!active) return;
+      setAbstractLookup({
+        paperId: paper.id,
+        status: result.status === "found" ? "found" : "not-found",
+        abstract: result.abstract,
+      });
+    }).catch(() => {
+      if (active) setAbstractLookup({ paperId: paper.id, status: "error" });
+    });
+    return () => { active = false; };
+  }, [paper?.abstract, paper?.doi, paper?.id]);
 
   if (!paper) {
     return (
@@ -155,6 +168,14 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
     : { paperId: paper.id, status: "idle" as const };
   const fallbackLinks = openAccessFallbackLinks(paper);
   const locatedOpenUrl = currentLookup.result?.status === "found" ? currentLookup.result.url : undefined;
+  const abstract = abstractLookup.paperId === paper.id && abstractLookup.status === "found"
+    ? abstractLookup.abstract ?? paper.abstract
+    : paper.abstract;
+  const currentAbstractLookup = abstractLookup.paperId === paper.id
+    ? abstractLookup
+    : { paperId: paper.id, status: paper.doi && isPlaceholderAbstract(paper.abstract) ? "checking" as const : "idle" as const };
+  const chineseTargets = showChinesePlatforms ? buildChinesePlatformTargets(paper.title) : [];
+  const identifiedChinesePlatforms = identifyChinesePlatforms(paper);
 
   async function findOpenAccess(targetPaper: UnifiedPaper) {
     setAccessLookup({ paperId: targetPaper.id, status: "checking" });
@@ -185,7 +206,10 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
 
         <section className="preview-section">
           <div className="section-title"><BookOpenText size={17} /><h2>摘要</h2></div>
-          <p className={paper.abstract.toLowerCase().startsWith("no abstract") ? "muted" : ""}>{paper.abstract}</p>
+          <p className={isPlaceholderAbstract(abstract) ? "muted" : ""}>{abstract}</p>
+          {currentAbstractLookup.status === "checking" && <p className="muted abstract-status">正在从其他公开元数据源补充摘要…</p>}
+          {currentAbstractLookup.status === "found" && <p className="abstract-source">摘要来源：OpenAIRE</p>}
+          {currentAbstractLookup.status === "error" && <p className="muted abstract-status">其他公开元数据源暂未提供摘要。</p>}
         </section>
 
         {(paper.topics.length > 0 || paper.concepts.length > 0) && (
@@ -194,6 +218,25 @@ function PaperPreview({ paper }: { paper?: UnifiedPaper }) {
             <div className="topic-list">
               {Array.from(new Set([...paper.topics, ...paper.concepts])).slice(0, 10).map((topic) => <span key={topic}>{topic}</span>)}
             </div>
+          </section>
+        )}
+
+        {showChinesePlatforms && (
+          <section className="preview-section">
+            <div className="section-title"><Database size={17} /><h2>中文平台入口</h2></div>
+            <div className="source-stack">
+              {chineseTargets.map((target) => {
+                const matched = identifiedChinesePlatforms.find((item) => item.key === target.key);
+                return (
+                  <ExternalAction url={matched?.recordUrl ?? target.searchUrl} key={target.key}>
+                    <span className={`source-chip ${matched ? "source-chip--chinese" : "source-chip--unavailable"}`}>{target.label}</span>
+                    <span>{matched ? "打开已识别记录" : "按题名检索"}</span>
+                    <ArrowUpRight size={14} />
+                  </ExternalAction>
+                );
+              })}
+            </div>
+            <p className="muted platform-note">平台收录和下载权限以打开后的平台页面为准。</p>
           </section>
         )}
 
@@ -241,6 +284,8 @@ export default function App() {
   const [history, setHistory] = useState<SearchHistoryEntry[]>(() => loadSearchHistory());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [showProviderSettings, setShowProviderSettings] = useState(false);
+  const [providerSettings, setProviderSettings] = useState(() => loadProviderSettings());
   const inputRef = useRef<HTMLInputElement>(null);
   const papers = session?.papers ?? [];
   const selectedPaper = papers[selectedIndex];
@@ -289,12 +334,42 @@ export default function App() {
     }
   }
 
+  function updateSemanticScholarApiKey(value: string) {
+    const nextSettings = saveProviderSettings({ ...providerSettings, semanticScholarApiKey: value });
+    setProviderSettings(nextSettings);
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
           <div className="brand-mark"><Search size={20} /></div>
           <div><strong>ScholarScope</strong><span>全球文献发现 · 技术验证版</span></div>
+        </div>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="数据源设置"
+            title="数据源设置"
+            onClick={() => setShowProviderSettings((visible) => !visible)}
+          >
+            <Settings2 size={17} />
+          </button>
+          {showProviderSettings && (
+            <div className="provider-settings-popover">
+              <label>
+                <span>Semantic Scholar API Key</span>
+                <input
+                  type="password"
+                  value={providerSettings.semanticScholarApiKey}
+                  onChange={(event) => updateSemanticScholarApiKey(event.target.value)}
+                  placeholder="可选，配置后启用 Semantic Scholar"
+                />
+              </label>
+              <p>未配置时不会请求匿名接口，避免 429 限流。</p>
+            </div>
+          )}
         </div>
       </header>
 
@@ -329,7 +404,7 @@ export default function App() {
           <div className="provider-statuses">
             {session.diagnostics.map((item) => (
               <span className={`provider-status provider-status--${item.status}`} title={item.error} key={item.provider}>
-                {item.status === "success" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                {item.status === "disabled" ? <MinusCircle size={13} /> : item.status === "success" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
                 {sourceNames[item.provider]} · {item.status === "success" ? `${item.resultCount} 条 / ${formatDuration(item.durationMs)}` : item.status === "timeout" ? "超时" : providerFailureLabel(item.error)}
               </span>
             ))}
@@ -346,7 +421,7 @@ export default function App() {
           )}
           {!loading && !session && (
             <div className="start-state">
-              <div className="start-state__intro"><FileSearch size={36} /><h1>从一个入口查看全球文献记录</h1><p>OpenAlex 负责广覆盖，Crossref 核验 DOI 与出版信息，Semantic Scholar 补充摘要和被引数据。</p></div>
+              <div className="start-state__intro"><FileSearch size={36} /><h1>从一个入口查看全球文献记录</h1><p>OpenAlex 负责广覆盖，Crossref 核验 DOI 与出版信息；Semantic Scholar 配置 API Key 后提供可选增强。</p></div>
               {history.length > 0 && (
                 <div className="history-block">
                   <div className="section-title"><History size={17} /><h2>最近检索</h2></div>
@@ -356,9 +431,9 @@ export default function App() {
             </div>
           )}
           {session && papers.length === 0 && !loading && <div className="empty-state"><FileSearch size={34} /><h2>没有可显示的结果</h2><p>可以减少限定词、关闭“仅开放获取”，或改用英文关键词。</p></div>}
-          {papers.map((paper, index) => <PaperRow paper={paper} active={index === selectedIndex} onSelect={() => setSelectedIndex(index)} key={`${paper.id}-${index}`} />)}
+          {papers.map((paper, index) => <PaperRow paper={paper} active={index === selectedIndex} showChinesePlatforms={shouldShowChinesePlatforms(paper, session?.query ?? "")} onSelect={() => setSelectedIndex(index)} key={`${paper.id}-${index}`} />)}
         </section>
-        <PaperPreview paper={selectedPaper} />
+        <PaperPreview paper={selectedPaper} showChinesePlatforms={selectedPaper ? shouldShowChinesePlatforms(selectedPaper, session?.query ?? "") : false} />
       </main>
     </div>
   );

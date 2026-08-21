@@ -1,16 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { UnifiedPaper } from "../types/search";
+import {
+  buildChinesePlatformTargets,
+  containsChineseText,
+  identifyChinesePlatforms,
+} from "./chinesePlatformService";
 
-const mocks = vi.hoisted(() => ({ fetchScholarlyText: vi.fn() }));
+function paper(overrides: Partial<UnifiedPaper> = {}): UnifiedPaper {
+  return {
+    id: "paper-1",
+    title: "碱性无氰镀锌工艺研究",
+    authors: [],
+    abstract: "",
+    citationCount: 0,
+    isOpenAccess: false,
+    sourceProvider: "OpenAlex",
+    concepts: [],
+    topics: [],
+    keywords: [],
+    references: [],
+    relatedPapers: [],
+    sourceProviders: ["OpenAlex"],
+    sourceUrls: {},
+    mergeWarnings: [],
+    relevanceScore: 0,
+    ...overrides,
+  };
+}
 
-vi.mock("./scholarlyFetch", () => ({ fetchScholarlyText: mocks.fetchScholarlyText }));
-
-import { buildChinesePlatformTargets, checkChinesePlatforms, classifyPlatformIndexHtml } from "./chinesePlatformService";
-
-describe("Chinese platform discovery", () => {
-  beforeEach(() => {
-    mocks.fetchScholarlyText.mockReset();
-  });
-
+describe("Chinese platform handoff", () => {
   it("builds direct title-search links for all three platforms", () => {
     const targets = buildChinesePlatformTargets("碱性无氰镀锌");
 
@@ -20,40 +38,23 @@ describe("Chinese platform discovery", () => {
     expect(decodeURIComponent(targets[2].searchUrl)).toContain("k=碱性无氰镀锌");
   });
 
-  it("marks a matching indexed result as found", () => {
-    const html = `
-      <ol>
-        <li class="b_algo"><h2><a href="https://kns.cnki.net/kcms2/article/abstract?v=1">碱性无氰镀锌工艺研究</a></h2></li>
-      </ol>
-    `;
-
-    expect(classifyPlatformIndexHtml(html, "碱性无氰镀锌工艺研究", "cnki.net")).toBe("found");
+  it("only enables Chinese handoff for text containing Han characters", () => {
+    expect(containsChineseText("碱性镀锌 additive")).toBe(true);
+    expect(containsChineseText("alkaline zinc plating")).toBe(false);
   });
 
-  it("does not mistake an unrelated result for platform availability", () => {
-    const html = `
-      <ol>
-        <li class="b_algo"><h2><a href="https://www.cqvip.com/doc/journal/123">完全不同的论文题目</a></h2></li>
-      </ol>
-    `;
+  it("identifies a platform from an OpenAlex landing page", () => {
+    const matches = identifyChinesePlatforms(paper({
+      chinesePlatformUrls: { cnki: "https://kns.cnki.net/kcms2/article/abstract?v=1" },
+    }));
 
-    expect(classifyPlatformIndexHtml(html, "碱性无氰镀锌工艺研究", "cqvip.com")).toBe("not-found");
+    expect(matches.map((match) => match.key)).toEqual(["cnki"]);
+    expect(matches[0].recordUrl).toContain("kns.cnki.net");
   });
 
-  it("reports an unavailable index page separately from no match", () => {
-    expect(classifyPlatformIndexHtml("<html><body>Request blocked</body></html>", "测试论文", "cnki.net")).toBe("unavailable");
-  });
-
-  it("checks all three domains with one index request", async () => {
-    mocks.fetchScholarlyText.mockResolvedValue(`
-      <li class="b_algo"><h2><a href="https://kns.cnki.net/kcms2/article/abstract?v=1">低电流密度区碱性镀锌研究</a></h2></li>
-      <li class="b_algo"><h2><a href="https://www.cqvip.com/doc/journal/123">低电流密度区碱性镀锌研究</a></h2></li>
-    `);
-
-    const results = await checkChinesePlatforms("低电流密度区碱性镀锌研究");
-
-    expect(mocks.fetchScholarlyText).toHaveBeenCalledOnce();
-    expect(results.filter((result) => result.status === "found").map((result) => result.key)).toEqual(["cnki", "cqvip"]);
-    expect(results.find((result) => result.key === "wanfang")?.status).toBe("not-found");
+  it("does not claim availability from an unrelated publisher URL", () => {
+    expect(identifyChinesePlatforms(paper({
+      publisherUrl: "https://doi.org/10.1000/example",
+    }))).toEqual([]);
   });
 });

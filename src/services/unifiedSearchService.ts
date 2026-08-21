@@ -2,6 +2,8 @@ import type { Paper, SearchFilters, SearchRequest, SearchSource } from "../types
 import type { ProviderDiagnostic, SearchHistoryEntry, SearchSession, UnifiedPaper } from "../types/search";
 import { crossrefService } from "./crossrefService";
 import { openAlexService } from "./openAlexService";
+import { isPlaceholderAbstract } from "./abstractLookupService";
+import { loadProviderSettings } from "./providerSettingsService";
 import { semanticScholarService } from "./semanticScholarService";
 
 const CACHE_TTL_MS = 15 * 60 * 1000;
@@ -12,12 +14,19 @@ const cache = new Map<string, { expiresAt: number; session: SearchSession }>();
 type Provider = {
   name: SearchSource;
   search: (request: SearchRequest) => Promise<Paper[]>;
+  isEnabled?: () => boolean;
+  disabledReason?: string;
 };
 
 const providers: Provider[] = [
   { name: "OpenAlex", search: (request) => openAlexService.searchWorks(request) },
   { name: "Crossref", search: (request) => crossrefService.searchWorks(request) },
-  { name: "Semantic Scholar", search: (request) => semanticScholarService.searchWorks(request) },
+  {
+    name: "Semantic Scholar",
+    search: (request) => semanticScholarService.searchWorks(request),
+    isEnabled: () => Boolean(loadProviderSettings().semanticScholarApiKey.trim()),
+    disabledReason: "未配置 API Key，已暂停匿名请求",
+  },
 ];
 
 function cleanDoi(value?: string): string | undefined {
@@ -39,11 +48,6 @@ export function normalizeTitle(value: string): string {
 function paperKey(paper: Paper): string {
   const doi = cleanDoi(paper.doi);
   return doi ? `doi:${doi}` : `title:${normalizeTitle(paper.title)}`;
-}
-
-function isPlaceholderAbstract(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return !value.trim() || normalized.startsWith("no abstract") || normalized.includes("abstract was provided");
 }
 
 function preferredAbstract(left: string, right: string): string {
@@ -68,6 +72,7 @@ function initialPaper(paper: Paper): UnifiedPaper {
   const url = sourceUrl(paper);
   return {
     ...paper,
+    abstractSource: isPlaceholderAbstract(paper.abstract) ? undefined : paper.sourceProvider,
     doi: cleanDoi(paper.doi),
     sourceProviders: [paper.sourceProvider],
     sourceUrls: url ? { [paper.sourceProvider]: url } : {},
@@ -83,6 +88,10 @@ function mergePaper(current: UnifiedPaper, incoming: Paper): UnifiedPaper {
   const mergeWarnings = yearConflict
     ? Array.from(new Set([...current.mergeWarnings, `来源年份不一致：${current.year} / ${incoming.year}`]))
     : current.mergeWarnings;
+  const abstract = preferredAbstract(current.abstract, incoming.abstract);
+  const abstractSource = abstract === current.abstract
+    ? current.abstractSource
+    : isPlaceholderAbstract(incoming.abstract) ? current.abstractSource : incoming.sourceProvider;
 
   return {
     ...current,
@@ -90,7 +99,8 @@ function mergePaper(current: UnifiedPaper, incoming: Paper): UnifiedPaper {
     openalexId: current.openalexId ?? incoming.openalexId,
     title: incoming.title.length > current.title.length ? incoming.title : current.title,
     authors: incoming.authors.length > current.authors.length ? incoming.authors : current.authors,
-    abstract: preferredAbstract(current.abstract, incoming.abstract),
+    abstract,
+    abstractSource,
     journal: current.journal ?? incoming.journal,
     year: current.year ?? incoming.year,
     publisher: current.publisher ?? incoming.publisher,
@@ -98,6 +108,7 @@ function mergePaper(current: UnifiedPaper, incoming: Paper): UnifiedPaper {
     publisherUrl: current.publisherUrl ?? incoming.publisherUrl,
     oaUrl: current.oaUrl ?? incoming.oaUrl,
     pdfUrl: current.pdfUrl ?? incoming.pdfUrl,
+    chinesePlatformUrls: { ...current.chinesePlatformUrls, ...incoming.chinesePlatformUrls },
     isOpenAccess: current.isOpenAccess || incoming.isOpenAccess,
     concepts: Array.from(new Set([...current.concepts, ...incoming.concepts])).slice(0, 12),
     topics: Array.from(new Set([...current.topics, ...incoming.topics])).slice(0, 10),
@@ -143,7 +154,11 @@ export function mergeAndRank(papers: Paper[], query: string, filters: SearchFilt
 }
 
 function cacheKey(query: string, filters: SearchFilters): string {
-  return JSON.stringify({ query: normalizeTitle(query), filters });
+  return JSON.stringify({
+    query: normalizeTitle(query),
+    filters,
+    semanticScholarEnabled: Boolean(loadProviderSettings().semanticScholarApiKey.trim()),
+  });
 }
 
 function timeout<T>(promise: Promise<T>, provider: SearchSource): Promise<T> {
@@ -203,6 +218,18 @@ export async function searchLiterature(query: string, filters: SearchFilters): P
     providers.map(async (provider) => {
       const providerStarted = performance.now();
       try {
+        if (provider.isEnabled && !provider.isEnabled()) {
+          return {
+            papers: [] as Paper[],
+            diagnostic: {
+              provider: provider.name,
+              status: "disabled",
+              resultCount: 0,
+              durationMs: 0,
+              error: provider.disabledReason,
+            } satisfies ProviderDiagnostic,
+          };
+        }
         const papers = await timeout(provider.search(request), provider.name);
         return {
           papers,

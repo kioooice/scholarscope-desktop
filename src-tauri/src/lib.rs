@@ -2,6 +2,7 @@ use rusqlite::{params, Connection};
 use reqwest::Url;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -60,6 +61,8 @@ struct Paper {
     publisher_url: Option<String>,
     oa_url: Option<String>,
     pdf_url: Option<String>,
+    #[serde(default)]
+    chinese_platform_urls: HashMap<String, String>,
     is_open_access: bool,
     source_provider: String,
     concepts: Vec<String>,
@@ -236,6 +239,28 @@ fn openalex_work_to_paper(work: &serde_json::Value) -> Paper {
         .cloned()
         .collect::<Vec<_>>();
     let open_access = nested_bool(work, &["open_access", "is_oa"]) || nested_bool(work, &["primary_location", "is_oa"]);
+    let mut chinese_platform_urls = HashMap::new();
+    if let Some(locations) = work.get("locations").and_then(|item| item.as_array()) {
+        for location in locations {
+            for key in ["landing_page_url", "pdf_url"] {
+                let Some(value) = value_string(location, key) else { continue };
+                let Ok(url) = Url::parse(&value) else { continue };
+                let Some(host) = url.host_str().map(str::to_ascii_lowercase) else { continue };
+                let platform = if host == "cnki.net" || host.ends_with(".cnki.net") {
+                    Some("cnki")
+                } else if host == "wanfangdata.com.cn" || host.ends_with(".wanfangdata.com.cn") {
+                    Some("wanfang")
+                } else if host == "cqvip.com" || host.ends_with(".cqvip.com") {
+                    Some("cqvip")
+                } else {
+                    None
+                };
+                if let Some(platform) = platform {
+                    chinese_platform_urls.entry(platform.to_string()).or_insert(value);
+                }
+            }
+        }
+    }
 
     Paper {
         id: value_string(work, "id").unwrap_or_else(|| value_string(work, "doi").unwrap_or_else(|| "openalex-unknown".to_string())),
@@ -253,6 +278,7 @@ fn openalex_work_to_paper(work: &serde_json::Value) -> Paper {
         publisher_url: nested_string(work, &["primary_location", "landing_page_url"]),
         oa_url: nested_string(work, &["open_access", "oa_url"]),
         pdf_url: nested_string(work, &["primary_location", "pdf_url"]),
+        chinese_platform_urls,
         is_open_access: open_access,
         source_provider: "OpenAlex".to_string(),
         concepts,
@@ -324,6 +350,7 @@ fn is_allowed_scholarly_host(url: &Url) -> bool {
             | Some("api.semanticscholar.org")
             | Some("export.arxiv.org")
             | Some("api.unpaywall.org")
+            | Some("api.openaire.eu")
     )
 }
 

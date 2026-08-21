@@ -40,6 +40,7 @@ export type Paper = {
   publisherUrl?: string;
   oaUrl?: string;
   pdfUrl?: string;
+  chinesePlatformUrls?: Partial<Record<"cnki" | "wanfang" | "cqvip", string>>;
   isOpenAccess: boolean;
   sourceProvider: SearchSource;
   concepts: string[];

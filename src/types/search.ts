@@ -1,13 +1,14 @@
 import type { Paper, SearchFilters, SearchSource } from "./athena";
 
 export type UnifiedPaper = Paper & {
+  abstractSource?: SearchSource | "OpenAIRE";
   sourceProviders: SearchSource[];
   sourceUrls: Partial<Record<SearchSource, string>>;
   mergeWarnings: string[];
   relevanceScore: number;
 };
 
-export type ProviderStatus = "pending" | "running" | "success" | "error" | "timeout";
+export type ProviderStatus = "pending" | "running" | "success" | "disabled" | "error" | "timeout";
 
 export type ProviderDiagnostic = {
   provider: SearchSource;
