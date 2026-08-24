@@ -63,11 +63,13 @@ describe("open-access lookup", () => {
     expect(mocks.fetchScholarlyJson).not.toHaveBeenCalled();
   });
 
-  it("builds CORE, BASE, and Google Scholar fallback searches", () => {
+  it("builds fallback searches in the configured discovery order", () => {
     const links = openAccessFallbackLinks({ title: "A precise paper title", doi: "10.1000/test" });
 
-    expect(links.map((link) => link.provider)).toEqual(["CORE", "BASE", "Google Scholar"]);
+    expect(links.map((link) => link.provider)).toEqual(["CORE", "BASE", "Google Scholar", "Zenodo", "HAL"]);
     expect(links.every((link) => decodeURIComponent(link.url).includes("A precise paper title"))).toBe(true);
     expect(links.every((link) => !/lens/i.test(link.url))).toBe(true);
+    expect(links[3].url).toContain("zenodo.org/search?q=");
+    expect(links[4].url).toContain("hal.science/search/index/?q=");
   });
 });

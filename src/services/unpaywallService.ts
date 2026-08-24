@@ -32,7 +32,7 @@ export type OpenAccessLookupResult = {
 };
 
 export type OpenAccessFallbackLink = {
-  provider: "CORE" | "BASE" | "Google Scholar";
+  provider: "CORE" | "BASE" | "Google Scholar" | "Zenodo" | "HAL";
   url: string;
 };
 
@@ -62,6 +62,8 @@ export function openAccessFallbackLinks(paper: Pick<Paper, "title" | "doi">): Op
     { provider: "CORE", url: `https://core.ac.uk/search?q=${encodeURIComponent(query)}` },
     { provider: "BASE", url: `https://www.base-search.net/Search/Results?lookfor=${encodeURIComponent(query)}&type=all&oaboost=1` },
     { provider: "Google Scholar", url: googleScholarService.searchLink(query).url },
+    { provider: "Zenodo", url: `https://zenodo.org/search?q=${encodeURIComponent(query)}` },
+    { provider: "HAL", url: `https://hal.science/search/index/?q=${encodeURIComponent(query)}` },
   ];
 }
 
