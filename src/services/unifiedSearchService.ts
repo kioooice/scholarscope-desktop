@@ -1,6 +1,7 @@
 import type { Paper, SearchFilters, SearchSource } from "../types/athena";
 import type { ProviderDiagnostic, SearchHistoryEntry, SearchSession, UnifiedPaper } from "../types/search";
 import { isPlaceholderAbstract } from "./abstractLookupService";
+import { internalApiUrl } from "./internalApi";
 import { loadProviderSettings } from "./providerSettingsService";
 
 const CACHE_TTL_MS = 15 * 60 * 1000;
@@ -161,7 +162,7 @@ async function searchWithInternalEngine(query: string, filters: SearchFilters): 
   const started = performance.now();
   try {
     const settings = loadProviderSettings();
-    const response = await fetch("/api/papers/search", {
+    const response = await fetch(internalApiUrl("/api/papers/search"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, filters, email: settings.crossrefEmail, timeoutMs: ENGINE_TIMEOUT_MS }),

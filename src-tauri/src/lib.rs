@@ -4,8 +4,54 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, RunEvent};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+const API_HOST: &str = "127.0.0.1";
+const API_PORT: &str = "5181";
+const RUNTIME_DIR_NAME: &str = ".scholarscope-runtime";
+const RESOURCE_DIR_NAME: &str = "resources";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+struct InternalEngine(Mutex<Option<Child>>);
+
+fn terminate_process_tree(process: &mut Child) {
+    #[cfg(windows)]
+    {
+        let process_id = process.id().to_string();
+        let _ = Command::new("taskkill.exe")
+            .args(["/PID", &process_id, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = process.kill();
+    }
+
+    let _ = process.wait();
+}
+
+impl Drop for InternalEngine {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.0.lock() {
+            if let Some(process) = child.as_mut() {
+                terminate_process_tree(process);
+            }
+        }
+    }
+}
 
 type CommandResult<T> = Result<T, String>;
 
@@ -118,6 +164,76 @@ fn db_path(app: &AppHandle) -> CommandResult<PathBuf> {
     let dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir.join("athena-scholar.sqlite3"))
+}
+
+fn packaged_runtime_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?
+        .join(RESOURCE_DIR_NAME)
+        .join(RUNTIME_DIR_NAME))
+}
+
+fn spawn_internal_engine(app: &AppHandle) -> CommandResult<Child> {
+    let packaged_root = packaged_runtime_dir(app)?;
+    let node = packaged_root.join("node.exe");
+    let server = packaged_root.join("server.mjs");
+
+    if !server.exists() {
+        return Err("便携包缺少 resources 文件夹中的内部下载引擎。请完整解压 ScholarScope 压缩包。".to_string());
+    }
+    if !node.exists() {
+        return Err("便携包缺少内部 Node.js 运行时。请重新下载并完整解压 ScholarScope 压缩包。".to_string());
+    }
+
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("scholarscope-data");
+    fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
+
+    let mut command = Command::new(node);
+    command
+        .arg(&server)
+        .current_dir(&packaged_root)
+        .env("SCHOLARSCOPE_API_HOST", API_HOST)
+        .env("SCHOLARSCOPE_API_PORT", API_PORT)
+        .env("SCHOLARSCOPE_API_ONLY", "1")
+        .env("SCHOLARSCOPE_DATA_DIR", &data_dir)
+        .env("SCANSCI_PDF_DATA_DIR", &data_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let embedded_python = packaged_root.join(".scansci-runtime").join(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "bin/python"
+    });
+    if !embedded_python.exists() {
+        return Err("便携包缺少内部 Python 下载引擎。请重新下载并完整解压 ScholarScope 压缩包。".to_string());
+    }
+    command.env("SCHOLARSCOPE_ENGINE_PYTHON", embedded_python);
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command
+        .spawn()
+        .map_err(|error| format!("启动内部下载引擎失败：{error}"))
+}
+
+fn stop_internal_engine(app: &AppHandle) {
+    if let Some(state) = app.try_state::<InternalEngine>() {
+        if let Ok(mut child) = state.0.lock() {
+            if let Some(process) = child.as_mut() {
+                terminate_process_tree(process);
+            }
+            *child = None;
+        }
+    }
 }
 
 fn connect(app: &AppHandle) -> CommandResult<Connection> {
@@ -796,6 +912,15 @@ fn load_notes(app: AppHandle) -> CommandResult<Vec<AthenaNote>> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let engine = if cfg!(debug_assertions) {
+                None
+            } else {
+                Some(spawn_internal_engine(&app.handle())?)
+            };
+            app.manage(InternalEngine(Mutex::new(engine)));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             initialize_database,
             clear_saved_research_data,
@@ -810,6 +935,10 @@ pub fn run() {
             save_note,
             load_notes
         ])
-        .run(tauri::generate_context!())
+        .run(tauri::generate_context!(), |app, event| {
+            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+                stop_internal_engine(app);
+            }
+        })
         .expect("error while running Athena Scholar");
 }

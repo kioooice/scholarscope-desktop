@@ -187,6 +187,9 @@ function jsonResponse(response, status, payload) {
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
   response.end(body);
 }
 
@@ -225,6 +228,10 @@ function safeEngineResult(result) {
 
 async function handleApi(request, response) {
   const requestUrl = new URL(request.url || "/", `http://${apiHost}:${apiPort}`);
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Access-Control-Expose-Headers", "X-ScholarScope-Source");
   if (request.method === "OPTIONS") {
     response.statusCode = 204;
     response.end();
@@ -360,6 +367,10 @@ function startEngine() {
 }
 
 function startFrontend() {
+  if (process.env.SCHOLARSCOPE_API_ONLY === "1") {
+    log("Desktop mode: internal API only; Tauri owns the application window.");
+    return;
+  }
   if (!isDev) {
     startStaticServer();
     return;

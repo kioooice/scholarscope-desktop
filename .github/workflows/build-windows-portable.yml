@@ -1,4 +1,4 @@
-name: Build Windows Portable Web App
+name: Build Windows Portable App
 
 on:
   workflow_dispatch:
@@ -12,9 +12,9 @@ concurrency:
 
 jobs:
   build-portable:
-    name: Build portable ZIP
+    name: Build portable ScholarScope ZIP
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Check out source
@@ -26,10 +26,8 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Set up Python for packaging
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -40,54 +38,71 @@ jobs:
       - name: Run lint
         run: npm run lint
 
-      - name: Build web frontend
-        run: npm run build
-
-      - name: Assemble self-contained portable folder
+      - name: Prepare portable internal engine
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $portableDir = Join-Path $env:GITHUB_WORKSPACE "portable"
-          $pythonDir = Join-Path $portableDir ".scansci-runtime"
-          New-Item -ItemType Directory -Force -Path $portableDir, $pythonDir | Out-Null
+          $stageRoot = Join-Path $env:RUNNER_TEMP "scholarscope-runtime-stage"
+          $runtimeDir = Join-Path $stageRoot ".scholarscope-runtime"
+          $pythonDir = Join-Path $runtimeDir ".scansci-runtime"
+          New-Item -ItemType Directory -Force -Path $runtimeDir, $pythonDir | Out-Null
 
-          Copy-Item "dist" (Join-Path $portableDir "dist") -Recurse
-          Copy-Item "engine" (Join-Path $portableDir "engine") -Recurse
-          Copy-Item "server.mjs" (Join-Path $portableDir "server.mjs")
-          Copy-Item "PORTABLE_README.txt" (Join-Path $portableDir "使用说明.txt")
+          Copy-Item "server.mjs" (Join-Path $runtimeDir "server.mjs")
+          Copy-Item "engine" (Join-Path $runtimeDir "engine") -Recurse
 
           $nodeZip = Join-Path $env:RUNNER_TEMP "node-win-x64.zip"
-          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.5.0/node-v24.5.0-win-x64.zip" -OutFile $nodeZip
-          Expand-Archive -Path $nodeZip -DestinationPath (Join-Path $env:RUNNER_TEMP "node-extracted") -Force
-          $nodeExecutable = Get-ChildItem (Join-Path $env:RUNNER_TEMP "node-extracted") -Filter "node.exe" -Recurse | Select-Object -First 1
-          if (-not $nodeExecutable) { throw "Bundled Node.js executable was not found." }
-          Copy-Item $nodeExecutable.FullName (Join-Path $portableDir "node.exe")
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.14.0/node-v24.14.0-win-x64.zip" -OutFile $nodeZip
+          $nodeExtracted = Join-Path $env:RUNNER_TEMP "scholarscope-node"
+          Expand-Archive -Path $nodeZip -DestinationPath $nodeExtracted -Force
+          $nodeRoot = Get-ChildItem -Path $nodeExtracted -Directory | Select-Object -First 1
+          if (-not $nodeRoot) { throw "Bundled Node.js folder was not found." }
+          $nodeExecutable = Join-Path $nodeRoot.FullName "node.exe"
+          if (-not (Test-Path -LiteralPath $nodeExecutable)) { throw "Bundled Node.js executable was not found." }
+          Copy-Item $nodeExecutable (Join-Path $runtimeDir "node.exe")
 
           $pythonZip = Join-Path $env:RUNNER_TEMP "python-embed.zip"
           Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile $pythonZip
           Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
           $pythonExe = Join-Path $pythonDir "python.exe"
-          $pythonPth = Get-ChildItem $pythonDir -Filter "*_pth" | Select-Object -First 1
+          $pythonPth = Get-ChildItem -Path $pythonDir -Filter "*_pth" | Select-Object -First 1
           if (-not $pythonPth) { throw "Python embeddable path file was not found." }
-          Add-Content $pythonPth.FullName "`nLib\site-packages`nimport site"
+          Add-Content -LiteralPath $pythonPth.FullName -Value "`nLib\site-packages`nimport site"
+
           $getPip = Join-Path $env:RUNNER_TEMP "get-pip.py"
           Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPip
           & $pythonExe $getPip --disable-pip-version-check
+          if ($LASTEXITCODE -ne 0) { throw "Pip bootstrap failed." }
           & $pythonExe -m pip install --disable-pip-version-check --no-cache-dir "scansci-pdf[web]==1.9.0" "mcp<2"
           if ($LASTEXITCODE -ne 0) { throw "Python engine dependency installation failed." }
+          & $pythonExe -c "import scansci_pdf, requests, mcp"
+          if ($LASTEXITCODE -ne 0) { throw "Embedded Python engine verification failed." }
 
-          $launcher = @'
-          @echo off
-          setlocal
-          cd /d "%~dp0"
-          "%~dp0node.exe" "%~dp0server.mjs"
-          endlocal
-          '@
-          Set-Content (Join-Path $portableDir "ScholarScope.cmd") $launcher -Encoding ascii
+      - name: Build desktop EXE
+        run: npm run tauri:build -- --no-bundle --ci
 
-          $hashLines = Get-ChildItem $portableDir -File -Recurse | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | ForEach-Object {
+      - name: Assemble portable ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portableDir = Join-Path $env:GITHUB_WORKSPACE "portable"
+          $resourcesDir = Join-Path $portableDir "resources"
+          $runtimeStage = Join-Path $env:RUNNER_TEMP "scholarscope-runtime-stage\.scholarscope-runtime"
+          New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
+
+          $desktopExe = @(
+            (Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\athena-scholar.exe"),
+            (Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\ScholarScope.exe")
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $desktopExe) { throw "Tauri desktop executable was not found." }
+          if (-not (Test-Path -LiteralPath $runtimeStage)) { throw "Portable internal engine was not found." }
+
+          Copy-Item $desktopExe (Join-Path $portableDir "ScholarScope.exe")
+          Copy-Item -LiteralPath $runtimeStage -Destination $resourcesDir -Recurse
+          Copy-Item "PORTABLE_README.txt" (Join-Path $portableDir "使用说明.txt")
+
+          $hashLines = Get-ChildItem -LiteralPath $portableDir -File -Recurse -Force | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            $relative = $_.FullName.Substring($portableDir.Length + 1)
+            $relative = $_.FullName.Substring($portableDir.Length + 1).Replace("\", "/")
             "$hash  $relative"
           }
           $hashLines | Set-Content (Join-Path $portableDir "SHA256SUMS.txt") -Encoding ascii
