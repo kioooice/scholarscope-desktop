@@ -21,6 +21,25 @@ const RESOURCE_DIR_NAME: &str = "resources";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+// Tauri returns extended-length Windows paths (for example, `\\\\?\\D:\\...`) for
+// portable resources. Node.js cannot resolve a script passed in that form.
+#[cfg(windows)]
+fn regular_windows_path(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix("\\\\?\\UNC\\") {
+        PathBuf::from(format!("\\\\{}", rest))
+    } else if let Some(rest) = raw.strip_prefix("\\\\?\\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+
+#[cfg(not(windows))]
+fn regular_windows_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 struct InternalEngine(Mutex<Option<Child>>);
 
 fn terminate_process_tree(process: &mut Child) {
@@ -162,18 +181,23 @@ struct AthenaNote {
 }
 
 fn db_path(app: &AppHandle) -> CommandResult<PathBuf> {
-    let dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let dir = regular_windows_path(
+        app.path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?,
+    );
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir.join("athena-scholar.sqlite3"))
 }
 
 fn packaged_runtime_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
-    let runtime_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|error| error.to_string())?
-        .join(RESOURCE_DIR_NAME)
-        .join(RUNTIME_DIR_NAME);
+    let runtime_dir = regular_windows_path(
+        app.path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?,
+    )
+    .join(RESOURCE_DIR_NAME)
+    .join(RUNTIME_DIR_NAME);
 
     if runtime_dir.is_dir() {
         return Ok(Some(runtime_dir));
@@ -189,10 +213,11 @@ fn packaged_runtime_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
 }
 
 fn engine_log_path(app: &AppHandle) -> CommandResult<PathBuf> {
-    let directory = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?;
+    let directory = regular_windows_path(
+        app.path()
+            .app_local_data_dir()
+            .map_err(|error| error.to_string())?,
+    );
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
 
     let log_path = directory.join("internal-engine.log");
@@ -227,6 +252,7 @@ fn engine_log_stdio(log_path: &Path) -> CommandResult<Stdio> {
 }
 
 fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult<Child> {
+    let packaged_root = regular_windows_path(packaged_root.to_path_buf());
     let node = packaged_root.join("node.exe");
     let server = packaged_root.join("server.mjs");
     let log_path = engine_log_path(app)?;
@@ -254,11 +280,12 @@ fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult
         );
     }
 
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("scholarscope-data");
+    let data_dir = regular_windows_path(
+        app.path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?,
+    )
+    .join("scholarscope-data");
     fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
 
     let mut command = Command::new(node);

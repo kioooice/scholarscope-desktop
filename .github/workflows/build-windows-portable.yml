@@ -110,6 +110,37 @@ jobs:
           $zipPath = Join-Path $env:GITHUB_WORKSPACE "ScholarScope-portable-win64.zip"
           Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $zipPath -CompressionLevel Optimal -Force
 
+      - name: Smoke test the portable app engine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portableExe = Join-Path $env:GITHUB_WORKSPACE "portable\ScholarScope.exe"
+          $process = Start-Process -FilePath $portableExe -PassThru
+          $ready = $false
+          try {
+            $deadline = (Get-Date).AddSeconds(25)
+            do {
+              Start-Sleep -Milliseconds 500
+              try {
+                $status = Invoke-RestMethod -Uri "http://127.0.0.1:5181/api/status" -TimeoutSec 2
+                if ($status.status -eq "ok" -and $status.engine.status -eq "ready") {
+                  Write-Host "Portable internal engine is ready."
+                  $ready = $true
+                  break
+                }
+              } catch {
+                # The desktop process needs a moment to initialize its bundled runtime.
+              }
+            } while ((Get-Date) -lt $deadline)
+          } finally {
+            if (-not $process.HasExited) {
+              & taskkill.exe /PID $process.Id /T /F | Out-Null
+            }
+          }
+          if (-not $ready) {
+            throw "Portable app did not make its internal engine ready within 25 seconds."
+          }
+
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
         with:
