@@ -910,7 +910,7 @@ fn load_notes(app: AppHandle) -> CommandResult<Vec<AthenaNote>> {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let engine = if cfg!(debug_assertions) {
@@ -935,10 +935,12 @@ pub fn run() {
             save_note,
             load_notes
         ])
-        .run(tauri::generate_context!(), |app, event| {
-            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
-                stop_internal_engine(app);
-            }
-        })
+        .build(tauri::generate_context!())
         .expect("error while running Athena Scholar");
+
+    app.run(|app, event| {
+        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            stop_internal_engine(app);
+        }
+    });
 }
