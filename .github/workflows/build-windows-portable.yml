@@ -113,8 +113,7 @@ jobs:
       - name: Smoke test the portable app engine
         shell: pwsh
         run: |
-          & "$env:GITHUB_WORKSPACE\scripts\smoke-test-portable.ps1"
-          -PortableExe "$env:GITHUB_WORKSPACE\portable\ScholarScope.exe"
+          & "$env:GITHUB_WORKSPACE\scripts\smoke-test-portable.ps1" -PortableExe "$env:GITHUB_WORKSPACE\portable\ScholarScope.exe"
 
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
