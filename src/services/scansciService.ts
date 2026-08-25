@@ -1,6 +1,6 @@
 import type { Paper, ProviderSettings } from "../types/athena";
 import type { ScanSciLookupState, UnifiedPaper } from "../types/search";
-import { internalApiUrl } from "./internalApi";
+import { fetchInternalApi } from "./internalApi";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const lookupCache = new Map<string, { expiresAt: number; result: ScanSciLookupState }>();
@@ -24,11 +24,11 @@ function safeError(error: unknown): string {
   return error.message.replace(/https?:\/\/[^\s]+/g, "远程接口").slice(0, 180);
 }
 
-async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number): Promise<T> {
+async function requestJson<T>(path: string, init: RequestInit, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetchInternalApi(path, { ...init, signal: controller.signal });
     const text = await response.text();
     let payload: unknown;
     try {
@@ -109,7 +109,7 @@ export const scansciService = {
   async checkStatus(settings: ProviderSettings): Promise<ScanSciConnectionStatus> {
     if (!settings.scansciEnabled || !settings.scansciAutoSearch) return "disabled";
     try {
-      const payload = await requestJson<JsonObject>(internalApiUrl("/api/status"), { method: "GET" }, settings.scansciTimeoutMs);
+      const payload = await requestJson<JsonObject>("/api/status", { method: "GET" }, settings.scansciTimeoutMs);
       const engine = asObject(payload.engine);
       return payload.status === "ok" && (!engine || engine.status === "ready") ? "ready" : "error";
     } catch (error) {
@@ -126,7 +126,7 @@ export const scansciService = {
 
     const request: Promise<ScanSciLookupState> = (async () => {
       try {
-        const payload = await requestJson<JsonObject>(internalApiUrl("/api/papers/locate"), {
+        const payload = await requestJson<JsonObject>("/api/papers/locate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestBody(paper, settings)),
@@ -147,7 +147,7 @@ export const scansciService = {
 
   async downloadPaper(paper: Pick<Paper, "title" | "doi">, settings: ProviderSettings, current?: ScanSciLookupState): Promise<ScanSciLookupState> {
     try {
-      const response = await fetch(internalApiUrl("/api/papers/download"), {
+      const response = await fetchInternalApi("/api/papers/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody(paper, settings)),

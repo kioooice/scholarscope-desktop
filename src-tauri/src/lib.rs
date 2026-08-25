@@ -1,12 +1,13 @@
-use rusqlite::{params, Connection};
-use reqwest::Url;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
+use reqwest::Url;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, RunEvent};
 
 #[cfg(windows)]
@@ -166,25 +167,91 @@ fn db_path(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(dir.join("athena-scholar.sqlite3"))
 }
 
-fn packaged_runtime_dir(app: &AppHandle) -> CommandResult<PathBuf> {
-    Ok(app
+fn packaged_runtime_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
+    let runtime_dir = app
         .path()
         .resource_dir()
         .map_err(|error| error.to_string())?
         .join(RESOURCE_DIR_NAME)
-        .join(RUNTIME_DIR_NAME))
+        .join(RUNTIME_DIR_NAME);
+
+    if runtime_dir.is_dir() {
+        return Ok(Some(runtime_dir));
+    }
+
+    // `tauri dev` uses the separately started local server. A portable build
+    // always has this directory, regardless of the Cargo assertion profile.
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
+
+    Err("便携包缺少 resources 文件夹中的内部下载引擎。请完整解压 ScholarScope 压缩包。".to_string())
 }
 
-fn spawn_internal_engine(app: &AppHandle) -> CommandResult<Child> {
-    let packaged_root = packaged_runtime_dir(app)?;
+fn engine_log_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+
+    let log_path = directory.join("internal-engine.log");
+    let mut log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|error| format!("无法创建内部引擎日志：{error}"))?;
+    writeln!(log_file, "[ScholarScope] Starting internal engine.")
+        .map_err(|error| format!("无法写入内部引擎日志：{error}"))?;
+    Ok(log_path)
+}
+
+fn append_engine_log(log_path: &Path, message: &str) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if let Ok(mut log_file) = OpenOptions::new().create(true).append(true).open(log_path) {
+        let _ = writeln!(log_file, "[{timestamp}] {message}");
+    }
+}
+
+fn engine_log_stdio(log_path: &Path) -> CommandResult<Stdio> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map(Stdio::from)
+        .map_err(|error| format!("无法打开内部引擎日志：{error}"))
+}
+
+fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult<Child> {
     let node = packaged_root.join("node.exe");
     let server = packaged_root.join("server.mjs");
+    let log_path = engine_log_path(app)?;
+    append_engine_log(
+        &log_path,
+        &format!(
+            "Runtime directory: {}. Node: {}. Server: {}.",
+            packaged_root.display(),
+            node.display(),
+            server.display()
+        ),
+    );
 
     if !server.exists() {
-        return Err("便携包缺少 resources 文件夹中的内部下载引擎。请完整解压 ScholarScope 压缩包。".to_string());
+        append_engine_log(&log_path, "Server module was not found.");
+        return Err(
+            "便携包缺少 resources 文件夹中的内部下载引擎。请完整解压 ScholarScope 压缩包。"
+                .to_string(),
+        );
     }
     if !node.exists() {
-        return Err("便携包缺少内部 Node.js 运行时。请重新下载并完整解压 ScholarScope 压缩包。".to_string());
+        append_engine_log(&log_path, "Bundled Node.js executable was not found.");
+        return Err(
+            "便携包缺少内部 Node.js 运行时。请重新下载并完整解压 ScholarScope 压缩包。".to_string(),
+        );
     }
 
     let data_dir = app
@@ -203,26 +270,47 @@ fn spawn_internal_engine(app: &AppHandle) -> CommandResult<Child> {
         .env("SCHOLARSCOPE_API_ONLY", "1")
         .env("SCHOLARSCOPE_DATA_DIR", &data_dir)
         .env("SCANSCI_PDF_DATA_DIR", &data_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdin(Stdio::null());
 
-    let embedded_python = packaged_root.join(".scansci-runtime").join(if cfg!(windows) {
-        "python.exe"
-    } else {
-        "bin/python"
-    });
+    let embedded_python = packaged_root
+        .join(".scansci-runtime")
+        .join(if cfg!(windows) {
+            "python.exe"
+        } else {
+            "bin/python"
+        });
     if !embedded_python.exists() {
-        return Err("便携包缺少内部 Python 下载引擎。请重新下载并完整解压 ScholarScope 压缩包。".to_string());
+        append_engine_log(&log_path, "Bundled Python executable was not found.");
+        return Err(
+            "便携包缺少内部 Python 下载引擎。请重新下载并完整解压 ScholarScope 压缩包。"
+                .to_string(),
+        );
     }
-    command.env("SCHOLARSCOPE_ENGINE_PYTHON", embedded_python);
+    append_engine_log(
+        &log_path,
+        &format!("Python: {}.", embedded_python.display()),
+    );
+    command
+        .env("SCHOLARSCOPE_ENGINE_PYTHON", embedded_python)
+        .stdout(engine_log_stdio(&log_path)?)
+        .stderr(engine_log_stdio(&log_path)?);
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    command
-        .spawn()
-        .map_err(|error| format!("启动内部下载引擎失败：{error}"))
+    match command.spawn() {
+        Ok(child) => {
+            append_engine_log(
+                &log_path,
+                &format!("Node process started with PID {}.", child.id()),
+            );
+            Ok(child)
+        }
+        Err(error) => {
+            append_engine_log(&log_path, &format!("Failed to start Node process: {error}"));
+            Err(format!("启动内部下载引擎失败：{error}"))
+        }
+    }
 }
 
 fn stop_internal_engine(app: &AppHandle) {
@@ -913,10 +1001,9 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let engine = if cfg!(debug_assertions) {
-                None
-            } else {
-                Some(spawn_internal_engine(&app.handle())?)
+            let engine = match packaged_runtime_dir(&app.handle())? {
+                Some(runtime_dir) => Some(spawn_internal_engine(&app.handle(), &runtime_dir)?),
+                None => None,
             };
             app.manage(InternalEngine(Mutex::new(engine)));
             Ok(())
@@ -939,7 +1026,7 @@ pub fn run() {
         .expect("error while running Athena Scholar");
 
     app.run(|app, event| {
-        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+        if matches!(event, RunEvent::Exit) {
             stop_internal_engine(app);
         }
     });

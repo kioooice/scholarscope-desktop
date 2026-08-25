@@ -119,7 +119,13 @@ class EngineWorker {
       const message = String(chunk).trim();
       if (message) log(`engine: ${message}`);
     });
-    this.child.once("error", (error) => this.failPending(error));
+    this.child.once("error", (error) => {
+      if (!shuttingDown) {
+        engineState = { ...engineState, status: "unavailable", error: error instanceof Error ? error.message : String(error) };
+        log(`Internal engine process failed: ${engineState.error}`);
+      }
+      this.failPending(error);
+    });
     this.child.once("exit", (code, signal) => {
       if (!shuttingDown) {
         engineState = { ...engineState, status: "unavailable", error: `engine exited (${code ?? signal ?? "unknown"})` };
@@ -342,9 +348,10 @@ function startApiServer() {
 }
 
 function startEngine() {
-  mkdirSync(dataDir, { recursive: true });
   let prepared;
+  engineState = { status: "starting", sourceCount: 13 };
   try {
+    mkdirSync(dataDir, { recursive: true });
     prepared = prepareEngine();
   } catch (error) {
     engineState = { status: "unavailable", sourceCount: 13, error: error instanceof Error ? error.message : String(error) };
@@ -358,8 +365,7 @@ function startEngine() {
   }
   try {
     engineWorker = new EngineWorker(prepared);
-    engineState = { status: "ready", sourceCount: 13 };
-    log("Internal paper engine is ready.");
+    log("Internal paper engine process started.");
   } catch (error) {
     engineState = { status: "unavailable", sourceCount: 13, error: error instanceof Error ? error.message : String(error) };
     log(`Internal engine failed to start: ${engineState.error}`);
@@ -479,6 +485,6 @@ process.on("uncaughtException", (error) => {
   shutdown(1);
 });
 
-startEngine();
 startApiServer();
 startFrontend();
+setImmediate(startEngine);
