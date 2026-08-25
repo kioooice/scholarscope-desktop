@@ -42,13 +42,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $stageRoot = Join-Path $env:RUNNER_TEMP "scholarscope-runtime-stage"
-          $runtimeDir = Join-Path $stageRoot ".scholarscope-runtime"
-          $pythonDir = Join-Path $runtimeDir ".scansci-runtime"
-          New-Item -ItemType Directory -Force -Path $runtimeDir, $pythonDir | Out-Null
+          $stageRoot = Join-Path $env:RUNNER_TEMP "scholarscope-portable-stage"
+          $resourcesDir = Join-Path $stageRoot "resources"
+          $appDir = Join-Path $resourcesDir "app"
+          $runtimeDir = Join-Path $resourcesDir "runtime"
+          $nodeDir = Join-Path $runtimeDir "node"
+          $pythonDir = Join-Path $runtimeDir "python"
+          New-Item -ItemType Directory -Force -Path $appDir, $nodeDir, $pythonDir | Out-Null
 
-          Copy-Item "apps\desktop\server.mjs" (Join-Path $runtimeDir "server.mjs")
-          Copy-Item "resources\engine" (Join-Path $runtimeDir "engine") -Recurse
+          Copy-Item "apps\desktop\server.mjs" (Join-Path $appDir "server.mjs")
+          Copy-Item "resources\engine" (Join-Path $appDir "engine") -Recurse
 
           $nodeZip = Join-Path $env:RUNNER_TEMP "node-win-x64.zip"
           Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.14.0/node-v24.14.0-win-x64.zip" -OutFile $nodeZip
@@ -58,7 +61,7 @@ jobs:
           if (-not $nodeRoot) { throw "Bundled Node.js folder was not found." }
           $nodeExecutable = Join-Path $nodeRoot.FullName "node.exe"
           if (-not (Test-Path -LiteralPath $nodeExecutable)) { throw "Bundled Node.js executable was not found." }
-          Copy-Item $nodeExecutable (Join-Path $runtimeDir "node.exe")
+          Copy-Item $nodeExecutable (Join-Path $nodeDir "node.exe")
 
           $pythonZip = Join-Path $env:RUNNER_TEMP "python-embed.zip"
           Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile $pythonZip
@@ -85,20 +88,34 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $portableDir = Join-Path $env:GITHUB_WORKSPACE "portable"
-          $resourcesDir = Join-Path $portableDir "resources"
-          $runtimeStage = Join-Path $env:RUNNER_TEMP "scholarscope-runtime-stage\.scholarscope-runtime"
-          New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
+          $resourcesStage = Join-Path $env:RUNNER_TEMP "scholarscope-portable-stage\resources"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
 
           $desktopExe = @(
             (Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\target\release\athena-scholar.exe"),
             (Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\target\release\ScholarScope.exe")
           ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $desktopExe) { throw "Tauri desktop executable was not found." }
-          if (-not (Test-Path -LiteralPath $runtimeStage)) { throw "Portable internal engine was not found." }
+          if (-not (Test-Path -LiteralPath $resourcesStage)) { throw "Portable internal resources were not found." }
 
           Copy-Item $desktopExe (Join-Path $portableDir "ScholarScope.exe")
-          Copy-Item -LiteralPath $runtimeStage -Destination $resourcesDir -Recurse
+          Copy-Item -LiteralPath $resourcesStage -Destination $portableDir -Recurse
           Copy-Item "PORTABLE_README.txt" (Join-Path $portableDir "使用说明.txt")
+
+          $requiredPaths = @(
+            (Join-Path $portableDir "resources\app\server.mjs"),
+            (Join-Path $portableDir "resources\app\engine\worker.py"),
+            (Join-Path $portableDir "resources\runtime\node\node.exe"),
+            (Join-Path $portableDir "resources\runtime\python\python.exe")
+          )
+          foreach ($path in $requiredPaths) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Portable layout is incomplete: $path"
+            }
+          }
+          if (Test-Path -LiteralPath (Join-Path $portableDir "resources\.scholarscope-runtime")) {
+            throw "Legacy portable runtime directory was included."
+          }
 
           $hashLines = Get-ChildItem -LiteralPath $portableDir -File -Recurse -Force | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -15,7 +15,7 @@ ScholarScope Windows 便携版
 - Microsoft Edge WebView2 Runtime（Windows 11 和大多数 Windows 10 电脑已经自带）
 - 可以访问所需的学术接口和文献来源
 
-压缩包已包含 Node.js、Python 和内部下载引擎。它们只作为 ScholarScope.exe 的内部资源使用，不需要安装 Python 或 Node.js，也不需要手动启动任何服务。
+压缩包已包含 Node.js、Python 和内部下载引擎。它们位于 resources\app 和 resources\runtime，只作为 ScholarScope.exe 的内部资源使用，不需要安装 Python 或 Node.js，也不需要手动启动任何服务。
 
 安全说明
 --------

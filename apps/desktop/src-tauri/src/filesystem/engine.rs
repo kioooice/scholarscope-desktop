@@ -12,8 +12,11 @@ use std::os::windows::process::CommandExt;
 
 const API_HOST: &str = "127.0.0.1";
 const API_PORT: &str = "5181";
-const RUNTIME_DIR_NAME: &str = ".scholarscope-runtime";
 const RESOURCE_DIR_NAME: &str = "resources";
+const APP_DIR_NAME: &str = "app";
+const RUNTIME_DIR_NAME: &str = "runtime";
+const NODE_DIR_NAME: &str = "node";
+const PYTHON_DIR_NAME: &str = "python";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -70,17 +73,16 @@ impl Drop for InternalEngine {
     }
 }
 
-fn packaged_runtime_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
-    let runtime_dir = regular_windows_path(
+fn packaged_resources_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
+    let resources_dir = regular_windows_path(
         app.path()
             .resource_dir()
             .map_err(|error| error.to_string())?,
     )
-    .join(RESOURCE_DIR_NAME)
-    .join(RUNTIME_DIR_NAME);
+    .join(RESOURCE_DIR_NAME);
 
-    if runtime_dir.is_dir() {
-        return Ok(Some(runtime_dir));
+    if resources_dir.join(APP_DIR_NAME).is_dir() && resources_dir.join(RUNTIME_DIR_NAME).is_dir() {
+        return Ok(Some(resources_dir));
     }
 
     // `tauri dev` uses the separately started local server. A portable build
@@ -89,7 +91,7 @@ fn packaged_runtime_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
         return Ok(None);
     }
 
-    Err("便携包缺少 resources 文件夹中的内部下载引擎。请完整解压 ScholarScope 压缩包。".to_string())
+    Err("便携包缺少 resources 文件夹中的内部应用资源。请完整解压 ScholarScope 压缩包。".to_string())
 }
 
 fn engine_log_path(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -131,16 +133,19 @@ fn engine_log_stdio(log_path: &Path) -> CommandResult<Stdio> {
         .map_err(|error| format!("无法打开内部引擎日志：{error}"))
 }
 
-fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult<Child> {
-    let packaged_root = regular_windows_path(packaged_root.to_path_buf());
-    let node = packaged_root.join("node.exe");
-    let server = packaged_root.join("server.mjs");
+fn spawn_internal_engine(app: &AppHandle, resources_dir: &Path) -> CommandResult<Child> {
+    let resources_dir = regular_windows_path(resources_dir.to_path_buf());
+    let app_dir = resources_dir.join(APP_DIR_NAME);
+    let runtime_dir = resources_dir.join(RUNTIME_DIR_NAME);
+    let node = runtime_dir.join(NODE_DIR_NAME).join("node.exe");
+    let server = app_dir.join("server.mjs");
     let log_path = engine_log_path(app)?;
     append_engine_log(
         &log_path,
         &format!(
-            "Runtime directory: {}. Node: {}. Server: {}.",
-            packaged_root.display(),
+            "Resources directory: {}. App: {}. Node: {}. Server: {}.",
+            resources_dir.display(),
+            app_dir.display(),
             node.display(),
             server.display()
         ),
@@ -149,7 +154,7 @@ fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult
     if !server.exists() {
         append_engine_log(&log_path, "Server module was not found.");
         return Err(
-            "便携包缺少 resources 文件夹中的内部下载引擎。请完整解压 ScholarScope 压缩包。"
+            "便携包缺少 resources 文件夹中的内部应用资源。请完整解压 ScholarScope 压缩包。"
                 .to_string(),
         );
     }
@@ -171,7 +176,7 @@ fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult
     let mut command = Command::new(node);
     command
         .arg(&server)
-        .current_dir(&packaged_root)
+        .current_dir(&app_dir)
         .env("SCHOLARSCOPE_API_HOST", API_HOST)
         .env("SCHOLARSCOPE_API_PORT", API_PORT)
         .env("SCHOLARSCOPE_API_ONLY", "1")
@@ -179,13 +184,11 @@ fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult
         .env("SCANSCI_PDF_DATA_DIR", &data_dir)
         .stdin(Stdio::null());
 
-    let embedded_python = packaged_root
-        .join(".scansci-runtime")
-        .join(if cfg!(windows) {
-            "python.exe"
-        } else {
-            "bin/python"
-        });
+    let embedded_python = runtime_dir.join(PYTHON_DIR_NAME).join(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "bin/python"
+    });
     if !embedded_python.exists() {
         append_engine_log(&log_path, "Bundled Python executable was not found.");
         return Err(
@@ -221,8 +224,8 @@ fn spawn_internal_engine(app: &AppHandle, packaged_root: &Path) -> CommandResult
 }
 
 pub fn start_internal_engine(app: &AppHandle) -> CommandResult<InternalEngine> {
-    let engine = match packaged_runtime_dir(app)? {
-        Some(runtime_dir) => Some(spawn_internal_engine(app, &runtime_dir)?),
+    let engine = match packaged_resources_dir(app)? {
+        Some(resources_dir) => Some(spawn_internal_engine(app, &resources_dir)?),
         None => None,
     };
     Ok(InternalEngine(Mutex::new(engine)))
