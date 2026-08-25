@@ -67,18 +67,15 @@ GitHub Actions 生成的 `ScholarScope-portable-win64.zip` 解压后包含：
 
 ```text
 ScholarScope.exe
-resources/
-  app/
-    server.mjs
-    engine/
-  runtime/
-    node/
-    python/
-SHA256SUMS.txt
-使用说明.txt
+app/
+  server.mjs
+  engine/
+runtime/
+  node/
+  python/
 ```
 
-这是免安装的绿色便携版：完整解压后直接双击 `ScholarScope.exe`。`resources/app` 保存内部应用模块，`resources/runtime` 保存随包附带的 Node.js 与 Python 运行时；请保持整个 `resources` 文件夹与 EXE 同目录，不需要单独打开或运行其中的任何文件。
+这是免安装的绿色便携版：完整解压后直接双击 `ScholarScope.exe`。`app` 保存内部应用模块，`runtime` 保存随包附带的 Node.js 与 Python 运行时；请保持这两个文件夹与 EXE 同目录，不需要单独打开或运行其中的任何文件。
 
 ## 质量检查
 

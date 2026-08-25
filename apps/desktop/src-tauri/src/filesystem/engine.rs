@@ -12,7 +12,6 @@ use std::os::windows::process::CommandExt;
 
 const API_HOST: &str = "127.0.0.1";
 const API_PORT: &str = "5181";
-const RESOURCE_DIR_NAME: &str = "resources";
 const APP_DIR_NAME: &str = "app";
 const RUNTIME_DIR_NAME: &str = "runtime";
 const NODE_DIR_NAME: &str = "node";
@@ -73,16 +72,15 @@ impl Drop for InternalEngine {
     }
 }
 
-fn packaged_resources_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
-    let resources_dir = regular_windows_path(
+fn packaged_portable_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
+    let portable_dir = regular_windows_path(
         app.path()
             .resource_dir()
             .map_err(|error| error.to_string())?,
-    )
-    .join(RESOURCE_DIR_NAME);
+    );
 
-    if resources_dir.join(APP_DIR_NAME).is_dir() && resources_dir.join(RUNTIME_DIR_NAME).is_dir() {
-        return Ok(Some(resources_dir));
+    if portable_dir.join(APP_DIR_NAME).is_dir() && portable_dir.join(RUNTIME_DIR_NAME).is_dir() {
+        return Ok(Some(portable_dir));
     }
 
     // `tauri dev` uses the separately started local server. A portable build
@@ -91,7 +89,7 @@ fn packaged_resources_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
         return Ok(None);
     }
 
-    Err("便携包缺少 resources 文件夹中的内部应用资源。请完整解压 ScholarScope 压缩包。".to_string())
+    Err("便携包缺少 app 或 runtime 文件夹。请完整解压 ScholarScope 压缩包。".to_string())
 }
 
 fn engine_log_path(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -133,18 +131,18 @@ fn engine_log_stdio(log_path: &Path) -> CommandResult<Stdio> {
         .map_err(|error| format!("无法打开内部引擎日志：{error}"))
 }
 
-fn spawn_internal_engine(app: &AppHandle, resources_dir: &Path) -> CommandResult<Child> {
-    let resources_dir = regular_windows_path(resources_dir.to_path_buf());
-    let app_dir = resources_dir.join(APP_DIR_NAME);
-    let runtime_dir = resources_dir.join(RUNTIME_DIR_NAME);
+fn spawn_internal_engine(app: &AppHandle, portable_dir: &Path) -> CommandResult<Child> {
+    let portable_dir = regular_windows_path(portable_dir.to_path_buf());
+    let app_dir = portable_dir.join(APP_DIR_NAME);
+    let runtime_dir = portable_dir.join(RUNTIME_DIR_NAME);
     let node = runtime_dir.join(NODE_DIR_NAME).join("node.exe");
     let server = app_dir.join("server.mjs");
     let log_path = engine_log_path(app)?;
     append_engine_log(
         &log_path,
         &format!(
-            "Resources directory: {}. App: {}. Node: {}. Server: {}.",
-            resources_dir.display(),
+            "Portable directory: {}. App: {}. Node: {}. Server: {}.",
+            portable_dir.display(),
             app_dir.display(),
             node.display(),
             server.display()
@@ -154,8 +152,7 @@ fn spawn_internal_engine(app: &AppHandle, resources_dir: &Path) -> CommandResult
     if !server.exists() {
         append_engine_log(&log_path, "Server module was not found.");
         return Err(
-            "便携包缺少 resources 文件夹中的内部应用资源。请完整解压 ScholarScope 压缩包。"
-                .to_string(),
+            "便携包缺少 app 文件夹中的内部应用资源。请完整解压 ScholarScope 压缩包。".to_string(),
         );
     }
     if !node.exists() {
@@ -224,8 +221,8 @@ fn spawn_internal_engine(app: &AppHandle, resources_dir: &Path) -> CommandResult
 }
 
 pub fn start_internal_engine(app: &AppHandle) -> CommandResult<InternalEngine> {
-    let engine = match packaged_resources_dir(app)? {
-        Some(resources_dir) => Some(spawn_internal_engine(app, &resources_dir)?),
+    let engine = match packaged_portable_dir(app)? {
+        Some(portable_dir) => Some(spawn_internal_engine(app, &portable_dir)?),
         None => None,
     };
     Ok(InternalEngine(Mutex::new(engine)))
