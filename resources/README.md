@@ -1,0 +1,3 @@
+# 内置资源
+
+`engine/worker.py` 是 ScholarScope 的内部文献定位与下载引擎源码。发布工作流会将它连同 Node.js 和嵌入式 Python 打入便携包的 `resources/.scholarscope-runtime`，用户无需单独运行或配置这些文件。

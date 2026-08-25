@@ -1,10 +1,12 @@
 import { createServer, request as httpRequest } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, createReadStream, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const isWindows = process.platform === "win32";
 const isDev = process.argv.includes("--dev");
 const webHost = process.env.SCHOLARSCOPE_HOST || "127.0.0.1";
@@ -13,7 +15,9 @@ const apiHost = process.env.SCHOLARSCOPE_API_HOST || "127.0.0.1";
 const apiPort = Number(process.env.SCHOLARSCOPE_API_PORT || 5181);
 const runtimeDir = path.join(rootDir, ".scansci-runtime");
 const dataDir = path.resolve(process.env.SCHOLARSCOPE_DATA_DIR || path.join(rootDir, ".scholarscope-data"));
-const workerPath = path.join(rootDir, "engine", "worker.py");
+const bundledWorkerPath = path.join(rootDir, "engine", "worker.py");
+const sourceWorkerPath = path.resolve(rootDir, "../../resources/engine/worker.py");
+const workerPath = existsSync(bundledWorkerPath) ? bundledWorkerPath : sourceWorkerPath;
 
 let frontendProcess;
 let frontendServer;
@@ -381,7 +385,7 @@ function startFrontend() {
     startStaticServer();
     return;
   }
-  const viteBin = path.join(rootDir, "node_modules", "vite", "bin", "vite.js");
+  const viteBin = require.resolve("vite/bin/vite.js");
   const args = isDev
     ? [viteBin, "--host", webHost, "--port", String(webPort), "--strictPort"]
     : [viteBin, "preview", "--host", webHost, "--port", String(webPort), "--strictPort"];

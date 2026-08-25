@@ -8,12 +8,17 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+apps/desktop/node_modules
 dist
+apps/desktop/dist
 dist-ssr
 .scansci-runtime/
+apps/desktop/.scansci-runtime/
 .scholarscope-data/
+apps/desktop/.scholarscope-data/
 __pycache__/
 src-tauri/target/
+apps/desktop/src-tauri/target/
 *.local
 
 # Editor directories and files

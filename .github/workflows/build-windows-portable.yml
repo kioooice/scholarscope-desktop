@@ -47,8 +47,8 @@ jobs:
           $pythonDir = Join-Path $runtimeDir ".scansci-runtime"
           New-Item -ItemType Directory -Force -Path $runtimeDir, $pythonDir | Out-Null
 
-          Copy-Item "server.mjs" (Join-Path $runtimeDir "server.mjs")
-          Copy-Item "engine" (Join-Path $runtimeDir "engine") -Recurse
+          Copy-Item "apps\desktop\server.mjs" (Join-Path $runtimeDir "server.mjs")
+          Copy-Item "resources\engine" (Join-Path $runtimeDir "engine") -Recurse
 
           $nodeZip = Join-Path $env:RUNNER_TEMP "node-win-x64.zip"
           Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.14.0/node-v24.14.0-win-x64.zip" -OutFile $nodeZip
@@ -78,7 +78,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Embedded Python engine verification failed." }
 
       - name: Build desktop EXE
-        run: npm run tauri:build -- --no-bundle --ci
+        run: npm --workspace scholarscope-desktop run tauri:build -- --no-bundle --ci
 
       - name: Assemble portable ZIP
         shell: pwsh
@@ -90,8 +90,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
 
           $desktopExe = @(
-            (Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\athena-scholar.exe"),
-            (Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\ScholarScope.exe")
+            (Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\target\release\athena-scholar.exe"),
+            (Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\target\release\ScholarScope.exe")
           ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $desktopExe) { throw "Tauri desktop executable was not found." }
           if (-not (Test-Path -LiteralPath $runtimeStage)) { throw "Portable internal engine was not found." }
@@ -113,33 +113,8 @@ jobs:
       - name: Smoke test the portable app engine
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $portableExe = Join-Path $env:GITHUB_WORKSPACE "portable\ScholarScope.exe"
-          $process = Start-Process -FilePath $portableExe -PassThru
-          $ready = $false
-          try {
-            $deadline = (Get-Date).AddSeconds(25)
-            do {
-              Start-Sleep -Milliseconds 500
-              try {
-                $status = Invoke-RestMethod -Uri "http://127.0.0.1:5181/api/status" -TimeoutSec 2
-                if ($status.status -eq "ok" -and $status.engine.status -eq "ready") {
-                  Write-Host "Portable internal engine is ready."
-                  $ready = $true
-                  break
-                }
-              } catch {
-                # The desktop process needs a moment to initialize its bundled runtime.
-              }
-            } while ((Get-Date) -lt $deadline)
-          } finally {
-            if (-not $process.HasExited) {
-              & taskkill.exe /PID $process.Id /T /F | Out-Null
-            }
-          }
-          if (-not $ready) {
-            throw "Portable app did not make its internal engine ready within 25 seconds."
-          }
+          & "$env:GITHUB_WORKSPACE\scripts\smoke-test-portable.ps1"
+          -PortableExe "$env:GITHUB_WORKSPACE\portable\ScholarScope.exe"
 
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4

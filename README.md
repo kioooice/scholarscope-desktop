@@ -23,16 +23,30 @@ ScholarScope 是一个 Windows 便携式桌面论文查找工具，采用类似 
 - ScanSci 的来源核心作为内部下载引擎使用，不暴露 ScanSci Web/MCP 页面或独立操作
 - Crossref、OpenAlex 等元数据接口只用于统一记录和题名解析，不作为额外下载来源展示，也不会把 Crossref 计为第 14 个来源
 
-核心文件：
+## 目录
 
 ```text
-src/App.tsx                              单窗口搜索与预览界面
-src/services/unifiedSearchService.ts    统一元数据检索、合并、排序和缓存
-src/services/scansciService.ts          内部定位和下载 API 客户端
-engine/worker.py                         内部 Python 引擎与来源定位/下载边界
-server.mjs                               内部引擎 API 与 worker 管理
-src-tauri/src/lib.rs                     桌面 EXE 启动与内部引擎管理
+apps/
+  desktop/
+    src/                                 React 界面、状态和前端服务
+    src-tauri/
+      migrations/                        SQLite 数据库初始化与后续升级
+      src/
+        commands/                        Tauri 命令边界
+        services/                        学术接口与业务逻辑
+        database/                        SQLite 连接与迁移
+        filesystem/                      内置运行时和进程生命周期
+    server.mjs                           内部 API 与 Python worker 管理
+    package.json                         桌面应用依赖与开发命令
+resources/
+  engine/worker.py                       内部 Python 引擎与来源定位/下载边界
+scripts/
+  smoke-test-portable.ps1                打包后启动 EXE 并验证内置引擎
+.github/workflows/
+  build-windows-portable.yml             手动构建 Windows 便携包
 ```
+
+前端单元测试与对应服务放在一起，方便改动时一并维护；跨应用或发布验证脚本统一放在根目录 `scripts/`。
 
 ## 本地开发
 
