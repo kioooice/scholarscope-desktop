@@ -1,5 +1,19 @@
 import type { Paper, SearchFilters, SearchSource } from "./athena";
 
+export type ScanSciLookupStatus = "idle" | "checking" | "found" | "not-found" | "unavailable" | "error";
+
+export type ScanSciLookupState = {
+  status: ScanSciLookupStatus;
+  source?: string;
+  url?: string;
+  isPdf?: boolean;
+  routes?: Array<{ source?: string; url?: string; isPdf?: boolean }>;
+  checkedSources?: number;
+  totalSources?: number;
+  downloadStatus?: "idle" | "downloading" | "ready" | "error";
+  error?: string;
+};
+
 export type UnifiedPaper = Paper & {
   abstractSource?: SearchSource | "OpenAIRE";
   sourceProviders: SearchSource[];

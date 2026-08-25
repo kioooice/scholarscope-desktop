@@ -115,7 +115,7 @@ export function SettingsPage() {
           <h2>Research provider access</h2>
           <p>These are optional. They improve rate limits or prepare paid provider access, and are stored locally on this computer.</p>
           <div className="settings-controls settings-controls--stacked">
-            <p className="muted">主搜索链路使用 OpenAlex、Crossref 和 OpenAIRE；Unpaywall 在 DOI 查询中定位合法开放版本，不需要单独的 API Key。</p>
+            <p className="muted">内部下载引擎会并行整合元数据，并检查 ScanSci 动态来源池；找到路径后提供下载按钮。</p>
             <label className="text-control">
               <span>NCBI / PubMed API key</span>
               <input
@@ -126,12 +126,12 @@ export function SettingsPage() {
               />
             </label>
             <label className="text-control">
-              <span>Crossref contact email</span>
+              <span>学术接口联系邮箱</span>
               <input
                 type="email"
                 value={providerSettings.crossrefEmail}
                 onChange={(event) => updateProviderSettings({ crossrefEmail: event.target.value })}
-                placeholder="Optional, enters Crossref polite pool"
+                placeholder="Optional, improves scholarly API requests"
               />
             </label>
             <label className="text-control">
@@ -142,6 +142,30 @@ export function SettingsPage() {
                 onChange={(event) => updateProviderSettings({ googleScholarApiKey: event.target.value })}
                 placeholder="Reserved for a future SerpApi/Apify adapter"
               />
+            </label>
+            <label className="select-control">
+              <span>自动检查范围</span>
+              <select value={providerSettings.scansciScope} onChange={(event) => updateProviderSettings({ scansciScope: event.target.value as typeof providerSettings.scansciScope })}>
+                <option value="selected">当前最佳结果</option>
+                <option value="top">前 N 条结果</option>
+                <option value="all">全部结果</option>
+              </select>
+            </label>
+            {providerSettings.scansciScope === "top" && (
+              <label className="text-control">
+                <span>前 N 条结果</span>
+                <input type="number" min="1" max="50" value={providerSettings.scansciTopN} onChange={(event) => updateProviderSettings({ scansciTopN: Math.max(1, Math.min(50, Number(event.target.value) || 1)) })} />
+              </label>
+            )}
+          </div>
+          <div className="settings-actions">
+            <label className="check-chip">
+              <input type="checkbox" checked={providerSettings.scansciEnabled} onChange={(event) => updateProviderSettings({ scansciEnabled: event.target.checked })} />
+              <span>启用下载引擎</span>
+            </label>
+            <label className="check-chip">
+              <input type="checkbox" checked={providerSettings.scansciAutoSearch} onChange={(event) => updateProviderSettings({ scansciAutoSearch: event.target.checked })} />
+              <span>自动查找可下载 PDF</span>
             </label>
           </div>
         </div>
@@ -242,8 +266,8 @@ export function SettingsPage() {
       <section className="settings-row">
         <ShieldCheck />
         <div>
-          <h2>Legal open-access discovery</h2>
-          <p>Unpaywall, OpenAlex, and arXiv are queried for lawful OA records, preprints, and alternatives. No paywall circumvention features are implemented.</p>
+          <h2>Built-in document access</h2>
+          <p>ScholarScope 在内部运行统一来源池，先定位可获取路径，只有点击下载按钮后才获取 PDF。</p>
         </div>
       </section>
       <section className="settings-row">

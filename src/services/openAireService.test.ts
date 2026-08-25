@@ -64,10 +64,12 @@ describe("OpenAIRE provider", () => {
     });
   });
 
-  it("skips the incompatible keyword endpoint for Chinese queries", async () => {
+  it("passes Chinese queries to the same provider pipeline", async () => {
+    mocks.fetchScholarlyJson.mockResolvedValue({ response: { results: { result: [] } } });
+
     const papers = await openAireService.searchWorks({ ...request, query: "碱性无氰镀锌" });
 
     expect(papers).toEqual([]);
-    expect(mocks.fetchScholarlyJson).not.toHaveBeenCalled();
+    expect(mocks.fetchScholarlyJson).toHaveBeenCalledWith(expect.stringContaining("keywords="));
   });
 });

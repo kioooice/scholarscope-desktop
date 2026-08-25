@@ -57,31 +57,6 @@ function normalizeDoi(doi?: string): string | undefined {
   return doi.replace(/^https?:\/\/doi\.org\//i, "").trim();
 }
 
-function chinesePlatformUrls(work: OpenAlexWork): Partial<Record<"cnki" | "wanfang" | "cqvip", string>> {
-  const urls = [
-    work.primary_location?.landing_page_url,
-    work.primary_location?.pdf_url,
-    ...(work.locations ?? []).flatMap((location) => [location.landing_page_url, location.pdf_url]),
-  ].filter(Boolean) as string[];
-  const result: Partial<Record<"cnki" | "wanfang" | "cqvip", string>> = {};
-  for (const value of urls) {
-    try {
-      const host = new URL(value).hostname.toLowerCase();
-      const key = host === "cnki.net" || host.endsWith(".cnki.net")
-        ? "cnki"
-        : host === "wanfangdata.com.cn" || host.endsWith(".wanfangdata.com.cn")
-          ? "wanfang"
-          : host === "cqvip.com" || host.endsWith(".cqvip.com")
-            ? "cqvip"
-            : undefined;
-      if (key && !result[key]) result[key] = value;
-    } catch {
-      // Ignore malformed provider links.
-    }
-  }
-  return result;
-}
-
 function mapWork(work: OpenAlexWork): Paper {
   const authors = work.authorships?.map((item) => item.author?.display_name).filter(Boolean) as string[];
   const concepts = work.concepts?.map((concept) => concept.display_name).filter(Boolean).slice(0, 10) as string[];
@@ -103,7 +78,6 @@ function mapWork(work: OpenAlexWork): Paper {
     publisherUrl: primary?.landing_page_url,
     oaUrl: work.open_access?.oa_url,
     pdfUrl: primary?.pdf_url,
-    chinesePlatformUrls: chinesePlatformUrls(work),
     isOpenAccess,
     sourceProvider: "OpenAlex",
     concepts,

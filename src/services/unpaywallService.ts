@@ -1,5 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
-import type { AlternativePaper, Paper, SearchRequest } from "../types/athena";
+import type { AlternativePaper, ExternalDiscoverySource, Paper, SearchRequest } from "../types/athena";
 import { googleScholarService } from "./googleScholarService";
 import { loadProviderSettings } from "./providerSettingsService";
 import { fetchScholarlyJson } from "./scholarlyFetch";
@@ -32,9 +32,17 @@ export type OpenAccessLookupResult = {
 };
 
 export type OpenAccessFallbackLink = {
-  provider: "CORE" | "BASE" | "Google Scholar" | "Zenodo" | "HAL";
+  provider: ExternalDiscoverySource;
   url: string;
 };
+
+export const supplementalDiscoverySources: ExternalDiscoverySource[] = [
+  "CORE",
+  "BASE",
+  "Google Scholar",
+  "Zenodo",
+  "HAL",
+];
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const lookupCache = new Map<string, { expiresAt: number; result: OpenAccessLookupResult }>();
@@ -58,13 +66,14 @@ function bestOpenUrl(location?: UnpaywallBestLocation): string | undefined {
 
 export function openAccessFallbackLinks(paper: Pick<Paper, "title" | "doi">): OpenAccessFallbackLink[] {
   const query = [`"${paper.title}"`, paper.doi].filter(Boolean).join(" ");
-  return [
-    { provider: "CORE", url: `https://core.ac.uk/search?q=${encodeURIComponent(query)}` },
-    { provider: "BASE", url: `https://www.base-search.net/Search/Results?lookfor=${encodeURIComponent(query)}&type=all&oaboost=1` },
-    { provider: "Google Scholar", url: googleScholarService.searchLink(query).url },
-    { provider: "Zenodo", url: `https://zenodo.org/search?q=${encodeURIComponent(query)}` },
-    { provider: "HAL", url: `https://hal.science/search/index/?q=${encodeURIComponent(query)}` },
-  ];
+  const urls: Record<ExternalDiscoverySource, string> = {
+    CORE: `https://core.ac.uk/search?q=${encodeURIComponent(query)}`,
+    BASE: `https://www.base-search.net/Search/Results?lookfor=${encodeURIComponent(query)}&type=all&oaboost=1`,
+    "Google Scholar": googleScholarService.searchLink(query).url,
+    Zenodo: `https://zenodo.org/search?q=${encodeURIComponent(query)}`,
+    HAL: `https://hal.science/search/index/?q=${encodeURIComponent(query)}`,
+  };
+  return supplementalDiscoverySources.map((provider) => ({ provider, url: urls[provider] }));
 }
 
 export const unpaywallService = {

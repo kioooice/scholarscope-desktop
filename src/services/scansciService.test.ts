@@ -1,0 +1,122 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderSettings } from "../types/athena";
+import type { UnifiedPaper } from "../types/search";
+
+import { defaultProviderSettings } from "./providerSettingsService";
+import { scansciService, selectScanSciPapers } from "./scansciService";
+
+function settings(overrides: Partial<ProviderSettings> = {}): ProviderSettings {
+  return {
+    ...defaultProviderSettings,
+    scansciTimeoutMs: 2_000,
+    ...overrides,
+  };
+}
+
+function jsonResponse(payload: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  const body = JSON.stringify(payload);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(headers),
+    text: vi.fn().mockResolvedValue(body),
+    json: vi.fn().mockResolvedValue(payload),
+  } as unknown as Response;
+}
+
+function pdfResponse(source = "Repository mirror"): Response {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "application/pdf", "x-scholarscope-source": source }),
+    blob: vi.fn().mockResolvedValue(new Blob(["%PDF-1.7"], { type: "application/pdf" })),
+  } as unknown as Response;
+}
+
+function paper(id: string, overrides: Partial<UnifiedPaper> = {}): UnifiedPaper {
+  return {
+    id,
+    title: id,
+    authors: [],
+    abstract: "",
+    citationCount: 0,
+    isOpenAccess: false,
+    sourceProvider: "Crossref",
+    concepts: [],
+    topics: [],
+    keywords: [],
+    references: [],
+    relatedPapers: [],
+    sourceProviders: ["Crossref"],
+    sourceUrls: {},
+    mergeWarnings: [],
+    relevanceScore: 0,
+    ...overrides,
+  };
+}
+
+describe("integrated paper download engine", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("checks the internal engine and locates without downloading", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", engine: { status: "ready" }, sourceCount: 13 }))
+      .mockResolvedValueOnce(jsonResponse({
+        status: "found",
+        route: { source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true },
+        checkedSources: 13,
+        totalSources: 13,
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await scansciService.checkStatus(settings())).toBe("ready");
+    const result = await scansciService.searchPaper({ title: "中文标题", doi: "10.5555/scansci-unique" }, settings());
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/status");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/papers/locate");
+    expect(result).toMatchObject({
+      status: "found",
+      source: "CORE",
+      url: "https://repository.example/paper.pdf",
+      isPdf: true,
+      checkedSources: 13,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("downloads only after the explicit download request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(pdfResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:scansci-test");
+
+    const result = await scansciService.downloadPaper(
+      { title: "Open paper", doi: "10.5555/scansci-oa" },
+      settings(),
+      { status: "found", source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true },
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/papers/download");
+    expect(result).toMatchObject({ status: "found", source: "Repository mirror", url: "blob:scansci-test", isPdf: true, downloadStatus: "ready" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toMatchObject({ identifier: "10.5555/scansci-oa" });
+  });
+
+  it("returns not-found from the locate endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "not-found", checkedSources: 13, totalSources: 13 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await scansciService.searchPaper({ title: "No route", doi: "10.5555/scansci-not-found" }, settings());
+
+    expect(result).toMatchObject({ status: "not-found", checkedSources: 13, totalSources: 13 });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/papers/locate");
+  });
+
+  it("applies selected, top-N, and all scopes to papers", () => {
+    const papers = [paper("paper-1"), paper("paper-2"), paper("paper-3")];
+
+    expect(selectScanSciPapers(papers, settings({ scansciScope: "selected" }), "paper-2").map((item) => item.id)).toEqual(["paper-2"]);
+    expect(selectScanSciPapers(papers, settings({ scansciScope: "top", scansciTopN: 1 })).map((item) => item.id)).toEqual(["paper-1"]);
+    expect(selectScanSciPapers(papers, settings({ scansciScope: "all" })).map((item) => item.id)).toEqual(["paper-1", "paper-2", "paper-3"]);
+  });
+});

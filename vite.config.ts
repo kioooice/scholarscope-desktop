@@ -9,15 +9,9 @@ export default defineConfig({
     port: 5180,
     strictPort: true,
     proxy: {
-      '/api/openaire': {
-        target: 'https://api.openaire.eu',
+      '/api': {
+        target: 'http://127.0.0.1:5181',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/openaire/, ''),
-      },
-      '/api/unpaywall': {
-        target: 'https://api.unpaywall.org',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/unpaywall/, ''),
       },
     },
   },

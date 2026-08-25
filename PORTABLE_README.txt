@@ -4,30 +4,30 @@ ScholarScope Windows 便携版
 使用方法
 --------
 1. 将压缩包完整解压到一个普通文件夹。
-2. 双击 ScholarScope.exe。
-3. 输入主题、论文标题、DOI 或作者后开始检索。
+2. 双击 ScholarScope.cmd。
+3. 输入论文题名或 DOI 后开始检索。
+4. 找到可获取来源后，点击“下载 PDF”。
 
 运行要求
 --------
 - Windows 10 或 Windows 11（64 位）
-- Microsoft Edge WebView2 Runtime
-- 可以访问 OpenAlex、Crossref、OpenAIRE 和 Unpaywall
+- 可以访问所需的学术接口和文献来源
 
-大多数 Windows 10/11 电脑已经安装 WebView2。如果程序无法启动，请先通过微软官方渠道安装 WebView2 Runtime。
+压缩包已包含 Node.js、Python 和内部下载引擎，不需要另外安装 Python 或 Node.js，也不需要手动启动 ScanSci。
 
 安全说明
 --------
 - 当前是未签名的技术验证版，Windows 可能显示“未知发布者”。
-- 只应运行从本项目私有 GitHub Actions 下载的文件。
-- SHA256SUMS.txt 记录了 ScholarScope.exe 的校验值，可用于确认文件在下载后没有发生变化。
-- 本程序不会绕过付费墙，也不会自动下载论文全文。
+- 只应运行从本项目 GitHub Actions 下载的文件。
+- SHA256SUMS.txt 记录了压缩包内文件的校验值，可用于确认文件没有发生变化。
+- 本程序不会自动触发下载；找到可获取 PDF 后只提供下载按钮。
 
 本地数据
 --------
-搜索历史、设置和后续保存的数据保存在当前 Windows 用户的应用数据目录中，不会写入 ScholarScope.exe 所在目录。
+搜索历史、设置和下载文件保存在便携包目录的 `.scholarscope-data` 中。
 
 当前限制
 --------
-- Unpaywall 需要在数据源设置中填写真实联系邮箱；未设置时不会请求该服务。
-- 未找到开放版本时会直接提供 CORE、BASE 和 Google Scholar 检索入口；中文文献会显示知网、万方、维普的平台归属入口。
+- 元数据接口采用并行兜底，Crossref 不作为额外下载来源展示。
+- 定位阶段不会写入 PDF；用户点击下载按钮后才执行实际下载。
 - 本版本没有代码签名、自动更新和安装程序。

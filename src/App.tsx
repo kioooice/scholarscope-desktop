@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  Download,
   ExternalLink,
   FileSearch,
   History,
@@ -16,15 +17,13 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { abstractLookupService, isPlaceholderAbstract } from "./services/abstractLookupService";
-import { buildChinesePlatformLinks, containsChineseText } from "./services/chinesePlatformService";
+import { isPlaceholderAbstract } from "./services/abstractLookupService";
 import { openExternalUrl } from "./services/externalUrlService";
-import { loadSearchHistory, searchLiterature } from "./services/unifiedSearchService";
+import { loadSearchHistory, primaryProviderCount, searchLiterature } from "./services/unifiedSearchService";
 import { loadProviderSettings, saveProviderSettings } from "./services/providerSettingsService";
-import { openAccessFallbackLinks, unpaywallService } from "./services/unpaywallService";
-import type { OpenAccessLookupResult } from "./services/unpaywallService";
+import { scansciService, selectScanSciPapers, type ScanSciConnectionStatus } from "./services/scansciService";
 import type { SearchFilters, SearchSource } from "./types/athena";
-import type { SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
+import type { ScanSciLookupState, SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
 
 const defaultFilters: SearchFilters = {
   disciplines: [],
@@ -40,6 +39,7 @@ const sourceNames: Record<SearchSource, string> = {
   arXiv: "arXiv",
   PubMed: "PubMed",
   "Google Scholar": "Google Scholar",
+  ScholarScope: "下载引擎",
 };
 
 function formatDuration(durationMs: number): string {
@@ -56,6 +56,14 @@ function providerFailureLabel(error?: string): string {
   return "失败";
 }
 
+function scanSciStatusLabel(status: ScanSciConnectionStatus): string {
+  if (status === "disabled") return "未启用";
+  if (status === "checking") return "连接中";
+  if (status === "ready") return "已连接";
+  if (status === "unavailable") return "未连接";
+  return "失败";
+}
+
 function doiUrl(doi?: string): string | undefined {
   return doi ? `https://doi.org/${doi}` : undefined;
 }
@@ -66,12 +74,31 @@ function authorLine(paper: UnifiedPaper): string {
   return paper.authors.length > 4 ? `${visible} 等` : visible;
 }
 
-function SourceChip({ source }: { source: SearchSource }) {
-  return <span className="source-chip">{sourceNames[source]}</span>;
+function queryFallbackPaper(query: string): UnifiedPaper {
+  const doi = /^(?:https?:\/\/(?:dx\.)?doi\.org\/)?10\.\d{4,9}\/\S+$/i.test(query) ? query.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "") : undefined;
+  return {
+    id: `query:${query.toLowerCase()}`,
+    doi,
+    title: query,
+    authors: [],
+    abstract: "暂未返回摘要，正在由内部下载引擎寻找可获取版本。",
+    citationCount: 0,
+    isOpenAccess: false,
+    sourceProvider: "ScholarScope",
+    concepts: [],
+    topics: [],
+    keywords: [],
+    references: [],
+    relatedPapers: [],
+    sourceProviders: [],
+    sourceUrls: {},
+    mergeWarnings: [],
+    relevanceScore: 0,
+  };
 }
 
-function shouldShowChinesePlatforms(paper: UnifiedPaper, query: string): boolean {
-  return (containsChineseText(paper.title) || containsChineseText(query)) && buildChinesePlatformLinks(paper, query).length > 0;
+function SourceChip({ source }: { source: SearchSource }) {
+  return <span className="source-chip">{sourceNames[source]}</span>;
 }
 
 function ExternalAction({ url, className, children }: { url: string; className?: string; children: ReactNode }) {
@@ -89,17 +116,36 @@ function ExternalAction({ url, className, children }: { url: string; className?:
   );
 }
 
-function ChinesePlatformChips({ paper, query, enabled }: { paper: UnifiedPaper; query: string; enabled: boolean }) {
-  if (!enabled) return null;
-  const links = buildChinesePlatformLinks(paper, query);
-  return links.map((link) => (
-    <span className={`source-chip ${link.matchType === "record" ? "source-chip--chinese" : "source-chip--journal"}`} title={link.matchType === "record" ? `已确认${link.label}记录` : `按${link.label}期刊检索`} key={link.key}>
-      {link.label}{link.matchType === "record" ? "记录" : "期刊"}
-    </span>
-  ));
+function DownloadAction({ url, filename, className, onClick, children }: { url?: string; filename: string; className?: string; onClick?: () => void; children: ReactNode }) {
+  function handleClick() {
+    if (onClick) {
+      onClick();
+      return;
+    }
+    if (!url) return;
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${filename.replace(/[<>:"/\\|?*]/g, " ").replace(/\s+/g, " ").trim().slice(0, 140) || "paper"}.pdf`;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
+  return <button className={className} type="button" onClick={handleClick}>{children}</button>;
 }
 
-function PaperRow({ paper, query, active, onSelect, showChinesePlatforms }: { paper: UnifiedPaper; query: string; active: boolean; onSelect: () => void; showChinesePlatforms: boolean }) {
+function scanSciLabel(state?: ScanSciLookupState): string | undefined {
+  if (!state) return undefined;
+  if (state.status === "checking") return "来源检索中";
+  if (state.status === "found") return `${state.source || "下载来源"} · 已找到`;
+  if (state.status === "not-found") return "未找到可获取版本";
+  if (state.status === "unavailable") return "下载引擎未连接";
+  if (state.status === "error") return "下载引擎失败";
+  return undefined;
+}
+
+function PaperRow({ paper, active, onSelect, scanSciState }: { paper: UnifiedPaper; active: boolean; onSelect: () => void; scanSciState?: ScanSciLookupState }) {
   return (
     <button className={`paper-row${active ? " paper-row--active" : ""}`} type="button" onClick={onSelect}>
       <div className="paper-row__title">{paper.title}</div>
@@ -112,79 +158,30 @@ function PaperRow({ paper, query, active, onSelect, showChinesePlatforms }: { pa
       </div>
       <div className="paper-row__sources">
         {paper.sourceProviders.map((source) => <SourceChip source={source} key={source} />)}
-        <ChinesePlatformChips paper={paper} query={query} enabled={showChinesePlatforms} />
+        {scanSciState?.status === "found" && <span className="source-chip source-chip--scansci">{scanSciLabel(scanSciState)}</span>}
+        {scanSciState?.status === "checking" && <span className="source-chip source-chip--checking">{scanSciLabel(scanSciState)}</span>}
       </div>
     </button>
   );
 }
 
-function PaperPreview({ paper, query, showChinesePlatforms }: { paper?: UnifiedPaper; query: string; showChinesePlatforms: boolean }) {
-  const [accessLookup, setAccessLookup] = useState<{
-    paperId: string;
-    status: "idle" | "checking" | "done" | "error";
-    result?: OpenAccessLookupResult;
-  }>({ paperId: "", status: "idle" });
-  const [abstractLookup, setAbstractLookup] = useState<{
-    paperId: string;
-    status: "idle" | "checking" | "found" | "not-found" | "error";
-    abstract?: string;
-  }>({ paperId: "", status: "idle" });
-
-  useEffect(() => {
-    if (!paper?.doi || !isPlaceholderAbstract(paper.abstract)) return;
-    let active = true;
-    void abstractLookupService.findByDoi(paper.doi).then((result) => {
-      if (!active) return;
-      setAbstractLookup({
-        paperId: paper.id,
-        status: result.status === "found" ? "found" : "not-found",
-        abstract: result.abstract,
-      });
-    }).catch(() => {
-      if (active) setAbstractLookup({ paperId: paper.id, status: "error" });
-    });
-    return () => { active = false; };
-  }, [paper?.abstract, paper?.doi, paper?.id]);
-
-  useEffect(() => {
-    if (!paper || showChinesePlatforms) return;
-    const knownOpenUrl = paper.oaUrl || (paper.isOpenAccess ? paper.pdfUrl : undefined);
-    if (knownOpenUrl) return;
-
-    let active = true;
-    void unpaywallService.findOpenAccessVersion(paper).then((result) => {
-      if (active) setAccessLookup({ paperId: paper.id, status: "done", result });
-    }).catch(() => {
-      if (active) setAccessLookup({ paperId: paper.id, status: "error" });
-    });
-
-    return () => { active = false; };
-  }, [paper, showChinesePlatforms]);
-
+function PaperPreview({ paper, scanSciState, onDownload }: { paper?: UnifiedPaper; scanSciState?: ScanSciLookupState; onDownload: () => void }) {
   if (!paper) {
     return (
       <aside className="preview-panel preview-panel--empty">
         <FileSearch size={34} />
         <h2>选择一条文献</h2>
-        <p>右侧会直接显示元数据、摘要、来源和可访问页面，不在工具内下载全文。</p>
+        <p>右侧会直接显示元数据、摘要、来源和下载按钮。</p>
       </aside>
     );
   }
 
-  const publisherUrl = paper.publisherUrl || paper.sourceUrls.OpenAlex || paper.sourceUrls.Crossref || paper.sourceUrls.OpenAIRE || paper.sourceUrls["Semantic Scholar"];
-  const knownOpenUrl = paper.oaUrl || (paper.isOpenAccess ? paper.pdfUrl : undefined);
-  const fallbackLinks = openAccessFallbackLinks(paper);
-  const currentLookup = accessLookup.paperId === paper.id
-    ? accessLookup
-    : { paperId: paper.id, status: knownOpenUrl || showChinesePlatforms ? "done" as const : "checking" as const };
-  const locatedOpenUrl = currentLookup.result?.status === "found" ? currentLookup.result.url : undefined;
-  const abstract = abstractLookup.paperId === paper.id && abstractLookup.status === "found"
-    ? abstractLookup.abstract ?? paper.abstract
-    : paper.abstract;
-  const currentAbstractLookup = abstractLookup.paperId === paper.id
-    ? abstractLookup
-    : { paperId: paper.id, status: paper.doi && isPlaceholderAbstract(paper.abstract) ? "checking" as const : "idle" as const };
-  const chinesePlatformLinks = buildChinesePlatformLinks(paper, query);
+  const publisherUrl = paper.publisherUrl || paper.sourceUrls.ScholarScope;
+  const scanSciUrl = scanSciState?.status === "found" ? scanSciState.url : undefined;
+  const waitingForAccess = !scanSciState || scanSciState.status === "checking";
+  const downloadedUrl = scanSciState?.downloadStatus === "ready" && scanSciUrl?.startsWith("blob:") ? scanSciUrl : undefined;
+  const isDownloading = scanSciState?.downloadStatus === "downloading";
+  const abstract = paper.abstract;
 
   return (
     <aside className="preview-panel">
@@ -192,7 +189,7 @@ function PaperPreview({ paper, query, showChinesePlatforms }: { paper?: UnifiedP
         <div className="preview-kicker">
           <span>{paper.year ?? "年份未知"}</span>
           <span>被引 {paper.citationCount}</span>
-          {(paper.isOpenAccess || locatedOpenUrl) && <span className="oa-badge">开放获取</span>}
+          {paper.isOpenAccess && <span className="oa-badge">开放获取</span>}
         </div>
         <h1>{paper.title}</h1>
         <p className="preview-authors">{authorLine(paper)}</p>
@@ -206,9 +203,7 @@ function PaperPreview({ paper, query, showChinesePlatforms }: { paper?: UnifiedP
         <section className="preview-section">
           <div className="section-title"><BookOpenText size={17} /><h2>摘要</h2></div>
           <p className={isPlaceholderAbstract(abstract) ? "muted" : ""}>{abstract}</p>
-          {currentAbstractLookup.status === "checking" && <p className="muted abstract-status">正在从其他公开元数据源补充摘要…</p>}
-          {currentAbstractLookup.status === "found" && <p className="abstract-source">摘要来源：OpenAIRE</p>}
-          {currentAbstractLookup.status === "error" && <p className="muted abstract-status">其他公开元数据源暂未提供摘要。</p>}
+          {isPlaceholderAbstract(abstract) && <p className="muted abstract-status">当前元数据接口未提供摘要。</p>}
         </section>
 
         {(paper.topics.length > 0 || paper.concepts.length > 0) && (
@@ -217,22 +212,6 @@ function PaperPreview({ paper, query, showChinesePlatforms }: { paper?: UnifiedP
             <div className="topic-list">
               {Array.from(new Set([...paper.topics, ...paper.concepts])).slice(0, 10).map((topic) => <span key={topic}>{topic}</span>)}
             </div>
-          </section>
-        )}
-
-        {showChinesePlatforms && chinesePlatformLinks.length > 0 && (
-          <section className="preview-section">
-            <div className="section-title"><Database size={17} /><h2>中文平台检索</h2></div>
-            <div className="source-stack">
-              {chinesePlatformLinks.map((link) => (
-                <ExternalAction url={link.url} key={link.key}>
-                  <span className={`source-chip ${link.matchType === "record" ? "source-chip--chinese" : "source-chip--journal"}`}>{link.label}</span>
-                  <span>{link.matchType === "record" ? "打开已确认记录" : "按题名和期刊检索"}</span>
-                  <ArrowUpRight size={14} />
-                </ExternalAction>
-              ))}
-            </div>
-            <p className="muted platform-note">已有平台记录会直接打开；其余入口已按题名和期刊缩小检索范围。</p>
           </section>
         )}
 
@@ -248,24 +227,41 @@ function PaperPreview({ paper, query, showChinesePlatforms }: { paper?: UnifiedP
           {paper.mergeWarnings.map((warning) => <p className="warning-text" key={warning}>{warning}</p>)}
         </section>
 
+        {scanSciState && (
+          <section className="preview-section">
+            <div className="section-title"><Search size={17} /><h2>可获取来源</h2></div>
+            {scanSciState.status === "checking" && <p className="muted abstract-status">正在并行检查下载来源…</p>}
+            {scanSciState.status === "found" && scanSciUrl && (
+              <div className="source-stack">
+                <DownloadAction
+                  url={downloadedUrl}
+                  filename={paper.title}
+                  onClick={onDownload}
+                >
+                  <span className="source-chip source-chip--scansci">{scanSciState.source || "下载来源"}</span>
+                  <span>{isDownloading ? "正在准备 PDF" : downloadedUrl ? "再次下载 PDF" : "下载 PDF"}</span>
+                  {isDownloading ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}
+                </DownloadAction>
+                {scanSciUrl && !scanSciUrl.startsWith("blob:") && (
+                  <ExternalAction url={scanSciUrl}>
+                    <span className="source-chip">来源页面</span><span>查看来源</span><ArrowUpRight size={14} />
+                  </ExternalAction>
+                )}
+              </div>
+            )}
+            {scanSciState.status === "not-found" && <p className="muted abstract-status">已检查 {scanSciState.checkedSources ?? "多个"} 个下载来源，暂未找到可获取路径。</p>}
+            {scanSciState.status === "unavailable" && <p className="muted abstract-status">内部下载引擎尚未就绪。</p>}
+            {scanSciState.status === "error" && <p className="muted abstract-status">内部下载引擎暂时失败：{scanSciState.error || "请稍后重试"}</p>}
+            {scanSciState.downloadStatus === "error" && <p className="muted abstract-status">下载失败：{scanSciState.error || "请重试"}</p>}
+          </section>
+        )}
+
       </div>
 
       <div className="preview-actions">
         {publisherUrl && <ExternalAction className="button button--primary" url={publisherUrl}>查看出版页面 <ExternalLink size={15} /></ExternalAction>}
-        {!showChinesePlatforms && knownOpenUrl && <ExternalAction className="button" url={knownOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
-        {!showChinesePlatforms && !knownOpenUrl && locatedOpenUrl && <ExternalAction className="button" url={locatedOpenUrl}>查看开放版本 <ExternalLink size={15} /></ExternalAction>}
-        {!showChinesePlatforms && !knownOpenUrl && currentLookup.status === "checking" && (
-          <span className="button button--pending">正在检查开放版本 <LoaderCircle className="spin" size={15} /></span>
-        )}
-        {!showChinesePlatforms && !knownOpenUrl && currentLookup.status === "done" && currentLookup.result?.status === "not-found" && (
-          <>
-            <span className="access-fallback-note">未找到开放版本，继续检索：</span>
-            {fallbackLinks.map((link) => <ExternalAction className="button" url={link.url} key={link.provider}>到 {link.provider} 检索 <ExternalLink size={15} /></ExternalAction>)}
-          </>
-        )}
-        {!showChinesePlatforms && !knownOpenUrl && currentLookup.status === "error" && fallbackLinks.map((link) => (
-          <ExternalAction className="button" url={link.url} key={link.provider}>到 {link.provider} 检索 <ExternalLink size={15} /></ExternalAction>
-        ))}
+        {scanSciState?.status === "found" && scanSciUrl && <DownloadAction className="button" url={downloadedUrl} filename={paper.title} onClick={onDownload}>{isDownloading ? "正在准备 PDF" : downloadedUrl ? "再次下载 PDF" : "下载 PDF"} <Download size={15} /></DownloadAction>}
+        {waitingForAccess && <span className="button button--pending">正在寻找可获取版本 <LoaderCircle className="spin" size={15} /></span>}
         {doiUrl(paper.doi) && <ExternalAction className="button" url={doiUrl(paper.doi)!}>打开 DOI <ExternalLink size={15} /></ExternalAction>}
       </div>
     </aside>
@@ -282,9 +278,15 @@ export default function App() {
   const [error, setError] = useState<string>();
   const [showProviderSettings, setShowProviderSettings] = useState(false);
   const [providerSettings, setProviderSettings] = useState(() => loadProviderSettings());
+  const [scanSciResults, setScanSciResults] = useState<Record<string, ScanSciLookupState>>({});
+  const [scanSciStatus, setScanSciStatus] = useState<ScanSciConnectionStatus>("disabled");
   const inputRef = useRef<HTMLInputElement>(null);
   const papers = session?.papers ?? [];
   const selectedPaper = papers[selectedIndex];
+  const scanSciSelectedId = providerSettings.scansciScope === "selected" ? selectedPaper?.id : undefined;
+  const effectiveScanSciStatus: ScanSciConnectionStatus = !session || !providerSettings.scansciEnabled || !providerSettings.scansciAutoSearch
+    ? "disabled"
+    : scanSciStatus === "disabled" ? "checking" : scanSciStatus;
 
   const successfulProviders = useMemo(
     () => session?.diagnostics.filter((item) => item.status === "success").length ?? 0,
@@ -311,18 +313,52 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [papers.length]);
 
+  useEffect(() => {
+    let active = true;
+    if (!session || !providerSettings.scansciEnabled || !providerSettings.scansciAutoSearch) {
+      return () => { active = false; };
+    }
+
+    const onUpdate = (paperId: string, state: ScanSciLookupState) => {
+      if (active) setScanSciResults((current) => ({ ...current, [paperId]: state }));
+    };
+
+    void (async () => {
+      const connection = await scansciService.checkStatus(providerSettings);
+      if (!active) return;
+      setScanSciStatus(connection);
+      const targets = selectScanSciPapers(session.papers, providerSettings, scanSciSelectedId);
+      if (connection !== "ready") {
+        targets.forEach((paper) => onUpdate(paper.id, { status: connection === "error" ? "error" : "unavailable" }));
+        return;
+      }
+      await scansciService.discoverPapers(session.papers, providerSettings, onUpdate, scanSciSelectedId);
+    })().catch((discoveryError) => {
+      if (!active) return;
+      setScanSciStatus("error");
+      console.error("Internal download discovery failed", discoveryError);
+    });
+
+    return () => { active = false; };
+  }, [providerSettings, scanSciSelectedId, session]);
+
   async function runSearch(searchQuery = query) {
     const cleanQuery = searchQuery.trim();
     if (!cleanQuery || loading) return;
     setQuery(cleanQuery);
     setLoading(true);
     setError(undefined);
+    setScanSciResults({});
+    setScanSciStatus(providerSettings.scansciEnabled && providerSettings.scansciAutoSearch ? "checking" : "disabled");
     try {
       const nextSession = await searchLiterature(cleanQuery, filters);
-      setSession(nextSession);
+      const visibleSession = nextSession.rawResultCount === 0
+        ? { ...nextSession, papers: [queryFallbackPaper(cleanQuery)], mergedResultCount: 1 }
+        : nextSession;
+      setSession(visibleSession);
       setSelectedIndex(0);
       setHistory(loadSearchHistory());
-      if (!nextSession.rawResultCount) setError("四个主渠道均未返回结果，请调整检索词后重试。");
+      if (!nextSession.rawResultCount) setError(undefined);
     } catch (searchError) {
       setError(searchError instanceof Error ? searchError.message : "检索失败");
     } finally {
@@ -333,6 +369,21 @@ export default function App() {
   function updateContactEmail(value: string) {
     const nextSettings = saveProviderSettings({ ...providerSettings, crossrefEmail: value });
     setProviderSettings(nextSettings);
+  }
+
+  function updateScanSciSettings(changes: Partial<typeof providerSettings>) {
+    const nextSettings = saveProviderSettings({ ...providerSettings, ...changes });
+    setProviderSettings(nextSettings);
+    setScanSciResults({});
+    setScanSciStatus(nextSettings.scansciEnabled && nextSettings.scansciAutoSearch ? "checking" : "disabled");
+  }
+
+  async function downloadPaper(paper: UnifiedPaper) {
+    const current = scanSciResults[paper.id];
+    if (!current || current.status !== "found" || current.downloadStatus === "downloading") return;
+    setScanSciResults((states) => ({ ...states, [paper.id]: { ...current, downloadStatus: "downloading", error: undefined } }));
+    const result = await scansciService.downloadPaper(paper, providerSettings, current);
+    setScanSciResults((states) => ({ ...states, [paper.id]: result }));
   }
 
   return (
@@ -354,18 +405,41 @@ export default function App() {
           </button>
           {showProviderSettings && (
             <div className="provider-settings-popover">
-              <strong>当前主搜索链路</strong>
-              <p>OpenAlex、Crossref、OpenAIRE；输入 DOI 时再由 Unpaywall 定位合法开放版本。</p>
+              <strong>当前检索引擎</strong>
+              <p>内部下载引擎统一处理元数据和来源定位，多个接口并行兜底，不单独显示某一个接口。</p>
               <label>
-                <span>联系邮箱（Crossref / Unpaywall）</span>
+                <span>联系邮箱（元数据请求）</span>
                 <input
                   type="email"
                   value={providerSettings.crossrefEmail}
                   onChange={(event) => updateContactEmail(event.target.value)}
-                  placeholder="填写真实邮箱后启用 Unpaywall"
+                  placeholder="可填写真实邮箱以改善元数据请求"
                 />
               </label>
-              <p>Unpaywall 要求使用真实联系邮箱，邮箱只保存在本机设置中。</p>
+              <p>邮箱只保存在本机设置中，用于学术接口请求。</p>
+              <label className="popover-toggle">
+                <span>自动检查下载来源</span>
+                <input
+                  type="checkbox"
+                  checked={providerSettings.scansciEnabled && providerSettings.scansciAutoSearch}
+                  onChange={(event) => updateScanSciSettings({ scansciEnabled: event.target.checked, scansciAutoSearch: event.target.checked })}
+                />
+              </label>
+              <label>
+                <span>后台范围</span>
+                <select value={providerSettings.scansciScope} onChange={(event) => updateScanSciSettings({ scansciScope: event.target.value as typeof providerSettings.scansciScope })}>
+                  <option value="selected">仅当前选中</option>
+                  <option value="top">前 N 条结果</option>
+                  <option value="all">全部无开放链接结果</option>
+                </select>
+              </label>
+              {providerSettings.scansciScope === "top" && (
+                <label>
+                  <span>前 N 条</span>
+                  <input type="number" min="1" max="50" value={providerSettings.scansciTopN} onChange={(event) => updateScanSciSettings({ scansciTopN: Math.max(1, Math.min(50, Number(event.target.value) || 1)) })} />
+                </label>
+              )}
+              <p>输入题名后先返回元数据，再由内部引擎并行查找来源；找到后提供下载按钮，不会自动下载。</p>
             </div>
           )}
         </div>
@@ -398,7 +472,7 @@ export default function App() {
         <section className="session-bar">
           <div><strong>{session.mergedResultCount}</strong> 条统一结果<span>由 {session.rawResultCount} 条原始记录合并</span></div>
           <div><Clock3 size={14} />{session.cacheHit ? "缓存命中" : formatDuration(session.durationMs)}</div>
-          <div><Database size={14} />{successfulProviders}/4 主渠道可用</div>
+          <div><Database size={14} />{successfulProviders}/{primaryProviderCount} 统一引擎可用</div>
           <div className="provider-statuses">
             {session.diagnostics.map((item) => (
               <span className={`provider-status provider-status--${item.status}`} title={item.error} key={item.provider}>
@@ -406,6 +480,10 @@ export default function App() {
                 {sourceNames[item.provider]} · {item.status === "success" ? `${item.resultCount} 条 / ${formatDuration(item.durationMs)}` : item.status === "timeout" ? "超时" : providerFailureLabel(item.error)}
               </span>
             ))}
+            <span className={`provider-status provider-status--${effectiveScanSciStatus === "ready" ? "success" : effectiveScanSciStatus === "checking" ? "running" : effectiveScanSciStatus === "disabled" ? "disabled" : "error"}`} title="下载引擎只定位来源，点击下载后才获取 PDF">
+              {effectiveScanSciStatus === "ready" ? <CheckCircle2 size={13} /> : effectiveScanSciStatus === "disabled" ? <MinusCircle size={13} /> : effectiveScanSciStatus === "checking" ? <LoaderCircle className="spin" size={13} /> : <XCircle size={13} />}
+              下载引擎 · {scanSciStatusLabel(effectiveScanSciStatus)}
+            </span>
           </div>
         </section>
       )}
@@ -415,11 +493,11 @@ export default function App() {
       <main className="workspace">
         <section className="results-panel">
           {loading && !session && (
-            <div className="empty-state"><LoaderCircle className="spin" size={34} /><h2>正在检索四个主渠道</h2><p>结果会合并 DOI、标题、作者、摘要和开放获取信息。</p></div>
+            <div className="empty-state"><LoaderCircle className="spin" size={34} /><h2>正在检索文献</h2><p>先并行整理元数据，再检查可获取来源。</p></div>
           )}
           {!loading && !session && (
             <div className="start-state">
-              <div className="start-state__intro"><FileSearch size={36} /><h1>从一个入口查看全球文献记录</h1><p>OpenAlex 负责广覆盖，Crossref 核验出版信息，OpenAIRE 补充摘要；DOI 查询由 Unpaywall 定位合法开放版本。</p></div>
+              <div className="start-state__intro"><FileSearch size={36} /><h1>从一个入口查找论文</h1><p>输入题名或 DOI，先查看文献元数据，再从统一来源池中找到可获取路径。</p></div>
               {history.length > 0 && (
                 <div className="history-block">
                   <div className="section-title"><History size={17} /><h2>最近检索</h2></div>
@@ -428,10 +506,14 @@ export default function App() {
               )}
             </div>
           )}
-          {session && papers.length === 0 && !loading && <div className="empty-state"><FileSearch size={34} /><h2>没有可显示的结果</h2><p>可以减少限定词、关闭“仅开放获取”，或改用英文关键词。</p></div>}
-          {papers.map((paper, index) => <PaperRow paper={paper} query={session?.query ?? ""} active={index === selectedIndex} showChinesePlatforms={shouldShowChinesePlatforms(paper, session?.query ?? "")} onSelect={() => setSelectedIndex(index)} key={`${paper.id}-${index}`} />)}
+          {session && papers.length === 0 && !loading && <div className="empty-state"><FileSearch size={34} /><h2>没有可显示的结果</h2><p>可以减少限定词、关闭“仅开放获取”，或调整检索词后重试。</p></div>}
+          {papers.map((paper, index) => <PaperRow paper={paper} active={index === selectedIndex} scanSciState={scanSciResults[paper.id]} onSelect={() => setSelectedIndex(index)} key={`${paper.id}-${index}`} />)}
         </section>
-        <PaperPreview paper={selectedPaper} query={session?.query ?? ""} showChinesePlatforms={selectedPaper ? shouldShowChinesePlatforms(selectedPaper, session?.query ?? "") : false} />
+        <PaperPreview
+          paper={selectedPaper}
+          scanSciState={selectedPaper ? scanSciResults[selectedPaper.id] : undefined}
+          onDownload={() => { if (selectedPaper) void downloadPaper(selectedPaper); }}
+        />
       </main>
     </div>
   );

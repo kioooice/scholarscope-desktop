@@ -7,7 +7,7 @@ const timeline = [
     title: "Grounded Research Agent",
     items: [
       "Natural-language research questions and claims",
-      "OpenAlex, Crossref, OpenAIRE, Unpaywall, and specialist source handoff",
+      "Unified metadata retrieval and internal document-source discovery",
       "Relevance ranking, citations, evidence snippets, saved-paper graph",
     ],
   },
@@ -33,7 +33,7 @@ const timeline = [
 
 const capabilities = [
   { label: "Question or claim input", status: "Available", detail: "Ask Athena accepts full research questions and claims." },
-  { label: "Academic database search", status: "Available", detail: "OpenAlex, Crossref, OpenAIRE, Unpaywall, plus specialist source handoff." },
+  { label: "Academic database search", status: "Available", detail: "Parallel metadata retrieval with an internal document-source pool." },
   { label: "Keyword matching", status: "Available", detail: "Search query terms are cleaned and expanded before provider lookup." },
   { label: "Semantic expansion", status: "Available", detail: "Uses the configured AI backend to expand question meaning into scholarly query terms." },
   { label: "Evidence validation", status: "Available", detail: "Configured AI backends label cited source evidence as support, contradict, neutral, or unclear." },
@@ -43,7 +43,7 @@ const capabilities = [
 const faqs = [
   {
     question: "What databases does Athena search?",
-    answer: "The current build searches OpenAlex, Crossref, and OpenAIRE, then uses Unpaywall to locate lawful open versions by DOI. Specialist sources remain available through focused handoffs.",
+    answer: "The current build combines metadata interfaces in parallel, then checks the internal document-source pool by DOI. It presents a download button only after a route is found.",
   },
   {
     question: "Can it tell whether a paper supports a claim?",
@@ -176,7 +176,7 @@ export function HomePage() {
           <Database size={18} />
           <div>
             <h2>Current Sources</h2>
-            <p>OpenAlex, Crossref, OpenAIRE, Unpaywall, and focused specialist-source handoffs. AI backends will sit on top of citation-grounded retrieval.</p>
+            <p>Parallel metadata retrieval, unified source discovery, and user-triggered PDF downloads. AI backends remain layered on top of citation-grounded retrieval.</p>
           </div>
         </section>
       </aside>

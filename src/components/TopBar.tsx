@@ -14,7 +14,7 @@ export function TopBar() {
       </div>
       <div className="top-bar__status">
         <span><Database size={15} /> {library.length} papers</span>
-        <span><Wifi size={15} /> Live agent: OpenAlex / Unpaywall / arXiv</span>
+        <span><Wifi size={15} /> Live agent: unified metadata / document sources</span>
         <span>{graph?.nodes.length ?? 0} graph nodes</span>
         {statusMessage && <strong>{statusMessage}</strong>}
       </div>

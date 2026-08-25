@@ -290,6 +290,12 @@ kbd {
   border-color: #f1d0ce;
 }
 
+.provider-status--running {
+  color: #315d9d !important;
+  background: #edf4ff;
+  border-color: #cbdcf8;
+}
+
 .header-actions {
   position: relative;
 }
@@ -341,6 +347,30 @@ kbd {
   border: 1px solid #d5dce7;
   border-radius: 6px;
   outline: 0;
+}
+
+.provider-settings-popover select {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  color: #26334a;
+  background: #f8fafc;
+  border: 1px solid #d5dce7;
+  border-radius: 6px;
+  outline: 0;
+}
+
+.provider-settings-popover .popover-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.provider-settings-popover .popover-toggle input {
+  width: auto;
+  height: 16px;
+  accent-color: #315de8;
 }
 
 .provider-settings-popover p {
@@ -608,16 +638,10 @@ kbd {
   border-color: #cbd8ff;
 }
 
-.source-chip--chinese {
-  color: #28734c;
-  background: #e6f6ed;
-  border-color: #c8e8d5;
-}
-
-.source-chip--journal {
+.source-chip--scansci {
   color: #315d9d;
-  background: #edf3ff;
-  border-color: #d1def8;
+  background: #eaf2ff;
+  border-color: #c5d7fb;
 }
 
 .source-chip--checking {
@@ -625,14 +649,12 @@ kbd {
   background: #f3f5f8;
 }
 
-.source-chip--unavailable {
-  color: #9a672a;
-  background: #fff2de;
-  border-color: #f0dab8;
-}
-
 .source-stack button > span:nth-child(2) {
   flex: 1;
+}
+
+.supplemental-links {
+  margin-top: 9px;
 }
 
 .warning-text {

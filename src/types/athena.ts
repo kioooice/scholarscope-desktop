@@ -1,5 +1,6 @@
 export type SearchType = "topic" | "title" | "doi" | "author" | "keywords";
-export type SearchSource = "OpenAlex" | "OpenAIRE" | "Unpaywall" | "arXiv" | "Crossref" | "PubMed" | "Semantic Scholar" | "Google Scholar";
+export type SearchSource = "OpenAlex" | "OpenAIRE" | "Unpaywall" | "arXiv" | "Crossref" | "PubMed" | "Semantic Scholar" | "Google Scholar" | "ScholarScope";
+export type ExternalDiscoverySource = "CORE" | "BASE" | "Google Scholar" | "Zenodo" | "HAL";
 
 export type GraphNodeType =
   | "Paper"
@@ -40,7 +41,6 @@ export type Paper = {
   publisherUrl?: string;
   oaUrl?: string;
   pdfUrl?: string;
-  chinesePlatformUrls?: Partial<Record<"cnki" | "wanfang" | "cqvip", string>>;
   isOpenAccess: boolean;
   sourceProvider: SearchSource;
   concepts: string[];
@@ -116,7 +116,7 @@ export type ResearchAnswerSource = {
 };
 
 export type ExternalSearchLink = {
-  provider: SearchSource;
+  provider: ExternalDiscoverySource;
   label: string;
   url: string;
   note: string;
@@ -216,6 +216,11 @@ export type ProviderSettings = {
   ncbiApiKey: string;
   crossrefEmail: string;
   googleScholarApiKey: string;
+  scansciEnabled: boolean;
+  scansciAutoSearch: boolean;
+  scansciScope: "selected" | "top" | "all";
+  scansciTopN: number;
+  scansciTimeoutMs: number;
   aiProvider: AiProviderMode;
   aiBaseUrl: string;
   aiModel: string;

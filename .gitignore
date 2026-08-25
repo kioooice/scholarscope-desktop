@@ -10,6 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.scansci-runtime/
+.scholarscope-data/
+__pycache__/
 src-tauri/target/
 *.local
 

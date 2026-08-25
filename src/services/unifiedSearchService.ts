@@ -1,35 +1,18 @@
-import type { Paper, SearchFilters, SearchRequest, SearchSource } from "../types/athena";
+import type { Paper, SearchFilters, SearchSource } from "../types/athena";
 import type { ProviderDiagnostic, SearchHistoryEntry, SearchSession, UnifiedPaper } from "../types/search";
-import { crossrefService } from "./crossrefService";
-import { openAlexService } from "./openAlexService";
-import { openAireService } from "./openAireService";
 import { isPlaceholderAbstract } from "./abstractLookupService";
 import { loadProviderSettings } from "./providerSettingsService";
-import { unpaywallService } from "./unpaywallService";
 
 const CACHE_TTL_MS = 15 * 60 * 1000;
-const PROVIDER_TIMEOUT_MS = 15_000;
+const ENGINE_TIMEOUT_MS = 90_000;
 const HISTORY_KEY = "scholarscope.searchHistory.v1";
 const cache = new Map<string, { expiresAt: number; session: SearchSession }>();
 
-type Provider = {
-  name: SearchSource;
-  search: (request: SearchRequest) => Promise<Paper[]>;
-  isEnabled?: (request: SearchRequest) => boolean;
-  disabledReason?: string;
-};
+const ENGINE_PROVIDER: SearchSource = "ScholarScope";
 
-const providers: Provider[] = [
-  { name: "OpenAlex", search: (request) => openAlexService.searchWorks(request) },
-  { name: "Crossref", search: (request) => crossrefService.searchWorks(request) },
-  { name: "OpenAIRE", search: (request) => openAireService.searchWorks(request) },
-  {
-    name: "Unpaywall",
-    search: (request) => unpaywallService.searchWorks(request),
-    isEnabled: (request) => request.type === "doi" && Boolean(loadProviderSettings().crossrefEmail.trim()),
-    disabledReason: "需要在数据源设置中填写真实联系邮箱",
-  },
-];
+// Crossref supplies the initial record; the internal Python engine owns the
+// complete ScanSci source pool used for access discovery and download.
+export const primaryProviderCount = 1;
 
 function cleanDoi(value?: string): string | undefined {
   const doi = value?.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").toLowerCase();
@@ -66,10 +49,6 @@ function sourceUrl(paper: Paper): string | undefined {
   if (paper.publisherUrl) return paper.publisherUrl;
   if (paper.doi) return `https://doi.org/${cleanDoi(paper.doi)}`;
   return paper.openalexId;
-}
-
-function searchType(query: string): SearchRequest["type"] {
-  return /^(?:https?:\/\/(?:dx\.)?doi\.org\/)?10\.\d{4,9}\//i.test(query.trim()) ? "doi" : "keywords";
 }
 
 function initialPaper(paper: Paper): UnifiedPaper {
@@ -112,7 +91,6 @@ function mergePaper(current: UnifiedPaper, incoming: Paper): UnifiedPaper {
     publisherUrl: current.publisherUrl ?? incoming.publisherUrl,
     oaUrl: current.oaUrl ?? incoming.oaUrl,
     pdfUrl: current.pdfUrl ?? incoming.pdfUrl,
-    chinesePlatformUrls: { ...current.chinesePlatformUrls, ...incoming.chinesePlatformUrls },
     isOpenAccess: current.isOpenAccess || incoming.isOpenAccess,
     concepts: Array.from(new Set([...current.concepts, ...incoming.concepts])).slice(0, 12),
     topics: Array.from(new Set([...current.topics, ...incoming.topics])).slice(0, 10),
@@ -161,30 +139,67 @@ function cacheKey(query: string, filters: SearchFilters): string {
   return JSON.stringify({
     query: normalizeTitle(query),
     filters,
-    providerPipeline: "openalex-crossref-openaire-unpaywall-v1",
-    unpaywallConfigured: Boolean(loadProviderSettings().crossrefEmail.trim()),
-  });
-}
-
-function timeout<T>(promise: Promise<T>, provider: SearchSource): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(`${provider} 请求超过 ${PROVIDER_TIMEOUT_MS / 1000} 秒`)), PROVIDER_TIMEOUT_MS);
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
+    providerPipeline: "internal-engine-crossref-metadata-v1",
   });
 }
 
 function safeMessage(error: unknown): string {
   if (!(error instanceof Error)) return "未知错误";
   return error.message.replace(/https?:\/\/[^\s]+/g, "远程接口").slice(0, 180);
+}
+
+function normalizeEnginePaper(paper: Paper): Paper {
+  return {
+    ...paper,
+    sourceProvider: "ScholarScope",
+  };
+}
+
+async function searchWithInternalEngine(query: string, filters: SearchFilters): Promise<{ papers: Paper[]; diagnostic: ProviderDiagnostic }> {
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), ENGINE_TIMEOUT_MS);
+  const started = performance.now();
+  try {
+    const settings = loadProviderSettings();
+    const response = await fetch("/api/papers/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, filters, email: settings.crossrefEmail, timeoutMs: ENGINE_TIMEOUT_MS }),
+      signal: controller.signal,
+    });
+    const payload = await response.json() as {
+      papers?: Paper[];
+      diagnostic?: Partial<ProviderDiagnostic>;
+      error?: string;
+    };
+    if (!response.ok || payload.diagnostic?.status === "error") {
+      throw new Error(payload.error || payload.diagnostic?.error || `内部引擎请求失败：${response.status}`);
+    }
+    const papers = Array.isArray(payload.papers) ? payload.papers.map(normalizeEnginePaper) : [];
+    return {
+      papers,
+      diagnostic: {
+        provider: ENGINE_PROVIDER,
+        status: "success",
+        resultCount: papers.length,
+        durationMs: Number(payload.diagnostic?.durationMs) || Math.round(performance.now() - started),
+      },
+    };
+  } catch (error) {
+    const message = safeMessage(error);
+    return {
+      papers: [],
+      diagnostic: {
+        provider: ENGINE_PROVIDER,
+        status: message.includes("超时") || /abort|timeout/i.test(message) ? "timeout" : "error",
+        resultCount: 0,
+        durationMs: Math.round(performance.now() - started),
+        error: message,
+      },
+    };
+  } finally {
+    globalThis.clearTimeout(timer);
+  }
 }
 
 function storeHistory(session: SearchSession): void {
@@ -217,51 +232,9 @@ export async function searchLiterature(query: string, filters: SearchFilters): P
     return { ...cached.session, id: crypto.randomUUID(), startedAt: new Date().toISOString(), durationMs: 0, cacheHit: true };
   }
 
-  const request: SearchRequest = { query: cleanDoi(normalizedQuery) ?? normalizedQuery, type: searchType(normalizedQuery), filters };
   const started = performance.now();
-  const results = await Promise.all(
-    providers.map(async (provider) => {
-      const providerStarted = performance.now();
-      try {
-        if (provider.isEnabled && !provider.isEnabled(request)) {
-          return {
-            papers: [] as Paper[],
-            diagnostic: {
-              provider: provider.name,
-              status: "disabled",
-              resultCount: 0,
-              durationMs: 0,
-              error: provider.disabledReason,
-            } satisfies ProviderDiagnostic,
-          };
-        }
-        const papers = await timeout(provider.search(request), provider.name);
-        return {
-          papers,
-          diagnostic: {
-            provider: provider.name,
-            status: "success",
-            resultCount: papers.length,
-            durationMs: Math.round(performance.now() - providerStarted),
-          } satisfies ProviderDiagnostic,
-        };
-      } catch (error) {
-        const message = safeMessage(error);
-        return {
-          papers: [] as Paper[],
-          diagnostic: {
-            provider: provider.name,
-            status: message.includes("超过") ? "timeout" : "error",
-            resultCount: 0,
-            durationMs: Math.round(performance.now() - providerStarted),
-            error: message,
-          } satisfies ProviderDiagnostic,
-        };
-      }
-    }),
-  );
-
-  const rawPapers = results.flatMap((result) => result.papers);
+  const result = await searchWithInternalEngine(normalizedQuery, filters);
+  const rawPapers = result.papers;
   const papers = mergeAndRank(rawPapers, normalizedQuery, filters);
   const session: SearchSession = {
     id: crypto.randomUUID(),
@@ -272,7 +245,7 @@ export async function searchLiterature(query: string, filters: SearchFilters): P
     rawResultCount: rawPapers.length,
     mergedResultCount: papers.length,
     cacheHit: false,
-    diagnostics: results.map((result) => result.diagnostic),
+    diagnostics: [result.diagnostic],
     papers,
   };
 

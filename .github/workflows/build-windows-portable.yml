@@ -1,4 +1,4 @@
-name: Build Windows Portable
+name: Build Windows Portable Web App
 
 on:
   workflow_dispatch:
@@ -14,22 +14,24 @@ jobs:
   build-portable:
     name: Build portable ZIP
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Set up Node.js for the build
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Python for packaging
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install JavaScript dependencies
         run: npm ci
 
       - name: Run unit tests
@@ -38,36 +40,65 @@ jobs:
       - name: Run lint
         run: npm run lint
 
-      - name: Build Tauri executable
-        run: npm run tauri:build -- --no-bundle
+      - name: Build web frontend
+        run: npm run build
 
-      - name: Assemble portable folder
+      - name: Assemble self-contained portable folder
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $portableDir = Join-Path $env:GITHUB_WORKSPACE "portable"
-          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+          $pythonDir = Join-Path $portableDir ".scansci-runtime"
+          New-Item -ItemType Directory -Force -Path $portableDir, $pythonDir | Out-Null
 
-          $candidates = @(
-            "src-tauri/target/release/athena-scholar.exe",
-            "src-tauri/target/release/scholarscope.exe"
-          )
-          $executable = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $executable) {
-            Get-ChildItem "src-tauri/target/release" -Filter "*.exe" -Recurse
-            throw "Tauri executable was not found."
-          }
-
-          Copy-Item $executable (Join-Path $portableDir "ScholarScope.exe")
+          Copy-Item "dist" (Join-Path $portableDir "dist") -Recurse
+          Copy-Item "engine" (Join-Path $portableDir "engine") -Recurse
+          Copy-Item "server.mjs" (Join-Path $portableDir "server.mjs")
           Copy-Item "PORTABLE_README.txt" (Join-Path $portableDir "使用说明.txt")
 
-          $hash = (Get-FileHash (Join-Path $portableDir "ScholarScope.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  ScholarScope.exe" | Set-Content (Join-Path $portableDir "SHA256SUMS.txt") -Encoding ascii
+          $nodeZip = Join-Path $env:RUNNER_TEMP "node-win-x64.zip"
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.5.0/node-v24.5.0-win-x64.zip" -OutFile $nodeZip
+          Expand-Archive -Path $nodeZip -DestinationPath (Join-Path $env:RUNNER_TEMP "node-extracted") -Force
+          $nodeExecutable = Get-ChildItem (Join-Path $env:RUNNER_TEMP "node-extracted") -Filter "node.exe" -Recurse | Select-Object -First 1
+          if (-not $nodeExecutable) { throw "Bundled Node.js executable was not found." }
+          Copy-Item $nodeExecutable.FullName (Join-Path $portableDir "node.exe")
+
+          $pythonZip = Join-Path $env:RUNNER_TEMP "python-embed.zip"
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile $pythonZip
+          Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
+          $pythonExe = Join-Path $pythonDir "python.exe"
+          $pythonPth = Get-ChildItem $pythonDir -Filter "*_pth" | Select-Object -First 1
+          if (-not $pythonPth) { throw "Python embeddable path file was not found." }
+          Add-Content $pythonPth.FullName "`nLib\site-packages`nimport site"
+          $getPip = Join-Path $env:RUNNER_TEMP "get-pip.py"
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPip
+          & $pythonExe $getPip --disable-pip-version-check
+          & $pythonExe -m pip install --disable-pip-version-check --no-cache-dir "scansci-pdf[web]==1.9.0" "mcp<2"
+          if ($LASTEXITCODE -ne 0) { throw "Python engine dependency installation failed." }
+
+          $launcher = @'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          "%~dp0node.exe" "%~dp0server.mjs"
+          endlocal
+          '@
+          Set-Content (Join-Path $portableDir "ScholarScope.cmd") $launcher -Encoding ascii
+
+          $hashLines = Get-ChildItem $portableDir -File -Recurse | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $relative = $_.FullName.Substring($portableDir.Length + 1)
+            "$hash  $relative"
+          }
+          $hashLines | Set-Content (Join-Path $portableDir "SHA256SUMS.txt") -Encoding ascii
+
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "ScholarScope-portable-win64.zip"
+          Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $zipPath -CompressionLevel Optimal -Force
 
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
         with:
           name: ScholarScope-portable-win64
-          path: portable/*
+          path: ScholarScope-portable-win64.zip
           if-no-files-found: error
           retention-days: 30
