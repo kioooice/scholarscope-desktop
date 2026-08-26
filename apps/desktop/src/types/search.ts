@@ -8,7 +8,9 @@ export type ScanSciLookupState = {
   url?: string;
   isPdf?: boolean;
   routeId?: string;
-  routes?: Array<{ source?: string; url?: string; isPdf?: boolean; routeId?: string }>;
+  probeStatus?: "verified" | "unverified" | "blocked" | "rejected" | string;
+  probeError?: string;
+  routes?: Array<{ source?: string; url?: string; isPdf?: boolean; routeId?: string; probeStatus?: "verified" | "unverified" | "blocked" | "rejected" | string; probeError?: string }>;
   checkedSources?: number;
   totalSources?: number;
   downloadStatus?: "idle" | "downloading" | "ready" | "error";

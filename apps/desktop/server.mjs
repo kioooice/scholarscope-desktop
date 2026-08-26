@@ -215,7 +215,15 @@ function normalizeLocatedRoute(value) {
   try {
     const url = new URL(rawUrl);
     if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-    return { source, url: url.toString(), isPdf: value.isPdf === true };
+    const probeStatus = typeof value.probeStatus === "string" ? value.probeStatus.trim().slice(0, 40) : "";
+    const probeError = typeof value.probeError === "string" ? value.probeError.trim().slice(0, 240) : "";
+    return {
+      source,
+      url: url.toString(),
+      isPdf: value.isPdf === true,
+      ...(probeStatus ? { probeStatus } : {}),
+      ...(probeError ? { probeError } : {}),
+    };
   } catch {
     return undefined;
   }

@@ -1,15 +1,15 @@
 # ScholarScope
 
-ScholarScope 是一个 Windows 便携式桌面论文查找工具，采用类似 Everything 的单入口交互：输入论文题名或 DOI，先查看元数据和可获取来源，再由用户点击下载按钮获取 PDF。
+ScholarScope 是一个 Windows 便携式桌面论文查找工具，采用类似 Everything 的单入口交互：输入论文题名或 DOI，先查看元数据和来源链接，再由用户在浏览器中打开来源并下载 PDF。对已确认的直接 PDF，可选择使用应用内获取。
 
 ## 当前范围
 
 - 单搜索框与键盘优先操作
-- 内部下载引擎并行整合元数据接口，并复用 ScanSci 来源池定位可获取路径
-- 定位阶段只返回来源和路径，不自动下载
+- 内部来源引擎并行整合元数据接口，并复用 ScanSci 来源池定位来源链接
+- 定位阶段只返回来源和路径，不自动下载；默认打开来源链接
 - DOI 优先、标准化标题兜底的跨源合并
 - 摘要、作者、年份、期刊、被引和主题预览
-- 出版页面、DOI、来源页面与 PDF 下载按钮
+- 出版页面、DOI、来源链接与可选的应用内 PDF 获取
 - 数据源成功、失败、超时、结果数和耗时记录
 - 15 分钟会话缓存与最近 12 次检索历史
 - Vite 本地 Web 开发预览
@@ -89,12 +89,12 @@ npm run lint
 ## 当前限制
 
 - 元数据接口采用并行兜底；题名无法解析到 DOI 时，来源池无法按 DOI 定位。
-- 定位请求会复用来源函数的 URL 探测逻辑，但不会写入 PDF；点击下载后才执行实际下载。
+- 定位请求会复用来源函数的 URL 探测逻辑，但不会写入 PDF；默认打开来源链接，只有明确选择应用内获取时才执行实际下载。
 - 当前无模糊标题聚类，只合并 DOI 相同或标准化标题完全相同的记录。
 - 缓存目前只覆盖当前运行会话，检索历史保存在本机 WebView 存储中。
 
 ## 许可证与来源
 
-当前工作树已经收缩为 ScholarScope 的元数据检索、13 来源 PDF 定位、下载和 Windows 便携运行链路；未挂载的 Athena Scholar UI、Agent、AI、图谱、论文库和笔记层已移除。项目仍保留来自 [Athena Scholar](https://github.com/Hazza-uxdev/Athena-Scholar) 的历史派生关系，因此继续遵守 Apache License 2.0 的许可证、归属和修改声明要求。
+当前工作树已经收缩为 ScholarScope 的元数据检索、13 来源链接整理、可选 PDF 获取和 Windows 便携运行链路；未挂载的 Athena Scholar UI、Agent、AI、图谱、论文库和笔记层已移除。项目仍保留来自 [Athena Scholar](https://github.com/Hazza-uxdev/Athena-Scholar) 的历史派生关系，因此继续遵守 Apache License 2.0 的许可证、归属和修改声明要求。
 
 再分发时请同时保留 [LICENSE](./LICENSE) 和 [NOTICE](./NOTICE)。本项目自己的修改归属于 ScholarScope contributors；依赖包和内置 ScanSci 引擎仍分别受其各自许可证约束。

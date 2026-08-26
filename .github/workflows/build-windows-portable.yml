@@ -126,9 +126,12 @@ jobs:
       - name: Smoke test the portable app engine
         shell: pwsh
         run: |
-          & "$env:GITHUB_WORKSPACE\scripts\smoke-test-portable.ps1" -PortableExe "$env:GITHUB_WORKSPACE\portable\ScholarScope.exe"
+          & "$env:GITHUB_WORKSPACE\scripts\smoke-test-portable.ps1" `
+            -PortableExe "$env:GITHUB_WORKSPACE\portable\ScholarScope.exe" `
+            -TimeoutSeconds 60
 
       - name: Upload portable ZIP
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ScholarScope-portable-win64

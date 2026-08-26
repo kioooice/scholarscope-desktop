@@ -88,6 +88,43 @@ describe("integrated paper download engine", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a blocked source as a browser page instead of a PDF candidate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      status: "found",
+      route: {
+        source: "SpringerBrowser",
+        url: "https://publisher.example/article",
+        isPdf: false,
+        probeStatus: "blocked",
+        probeError: "来源被 Cloudflare 防护拦截，未返回 PDF。请打开来源页面完成验证，并在来源页直接下载 PDF。",
+      },
+      routes: [
+        {
+          source: "SpringerBrowser",
+          url: "https://publisher.example/article",
+          isPdf: false,
+          probeStatus: "blocked",
+        },
+        { source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true },
+      ],
+      checkedSources: 13,
+      totalSources: 13,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await scansciService.searchPaper({ title: "Blocked paper", doi: "10.5555/scansci-blocked" }, settings());
+
+    expect(result).toMatchObject({
+      status: "found",
+      source: "SpringerBrowser",
+      url: "https://publisher.example/article",
+      isPdf: false,
+      probeStatus: "blocked",
+    });
+    expect(result.routes?.[0]).toMatchObject({ isPdf: false, probeStatus: "blocked" });
+    expect(result.routes?.[1]).toMatchObject({ isPdf: true });
+  });
+
   it("downloads only after the explicit download request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(pdfResponse());
     vi.stubGlobal("fetch", fetchMock);

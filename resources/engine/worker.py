@@ -28,6 +28,19 @@ import requests
 DOI_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$", re.I)
 DEFAULT_SOURCE_COUNT = 13
 LOCATE_PROBE_TIMEOUT_SECONDS = 8.0
+HTML_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
+CHALLENGE_MARKERS = (
+    b"just a moment",
+    b"attention required",
+    b"challenge-platform",
+    b"cf-browser-verification",
+    b"cf-chl-",
+    b"cloudflare",
+    b"checking your browser",
+    b"security check",
+    b"turnstile",
+    b"verify you are human",
+)
 SOURCE_PRIORITY = {
     "plosdirect": 0,
     "unpaywall": 1,
@@ -143,24 +156,112 @@ def safe_url_for_log(url: Any) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
+def _is_html_content_type(content_type: str) -> bool:
+    media_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    return media_type in HTML_CONTENT_TYPES or media_type.endswith("+html")
+
+
+def classify_response_failure(
+    *,
+    status_code: int | None = None,
+    content_type: str = "",
+    sample: bytes = b"",
+    headers: Any = None,
+) -> str | None:
+    """Classify a response without treating an HTML challenge as a PDF.
+
+    A direct PDF URL can return a 200 HTML challenge after a redirect, so the
+    body markers are checked independently from the HTTP status. The result is
+    intentionally small and stable because it crosses the worker/API boundary.
+    """
+    body = bytes(sample or b"")[:8192].lower()
+    server = ""
+    if headers is not None:
+        try:
+            server = str(headers.get("server", "")).lower()
+        except (AttributeError, TypeError):
+            server = ""
+    # Never classify a response beginning with the PDF magic bytes as an HTML
+    # challenge merely because the document text mentions Cloudflare.
+    challenge = not body.startswith(b"%pdf-") and any(marker in body for marker in CHALLENGE_MARKERS)
+    if challenge or (
+        status_code in {403, 503}
+        and "cloudflare" in server
+        and (_is_html_content_type(content_type) or not content_type)
+    ):
+        return "cloudflare_challenge"
+    if status_code in {401, 403} and (_is_html_content_type(content_type) or body):
+        return "access_denied"
+    if status_code is not None and status_code >= 400:
+        return "http_error"
+    if _is_html_content_type(content_type):
+        return "not_pdf"
+    return None
+
+
 def response_failure_detail(
     *,
     url: str,
     status_code: int | None = None,
     content_type: str = "",
     sample: bytes = b"",
+    headers: Any = None,
     error: Exception | None = None,
 ) -> str:
     """Build a short diagnostic that can be shown in the engine log/UI."""
     if error is not None:
         return f"{type(error).__name__}: {str(error)[:180]}"
+    failure_kind = classify_response_failure(
+        status_code=status_code,
+        content_type=content_type,
+        sample=sample,
+        headers=headers,
+    )
     sample_text = re.sub(r"\s+", " ", sample[:240].decode("utf-8", errors="replace")).strip()
     detail = f"HTTP {status_code}" if status_code is not None else "无 HTTP 状态"
     if content_type:
         detail += f", Content-Type {content_type[:100]}"
-    if sample_text:
+    if failure_kind == "cloudflare_challenge":
+        return f"{detail}, Cloudflare 验证页"
+    if failure_kind == "access_denied":
+        return f"{detail}, 来源拒绝访问"
+    if failure_kind == "not_pdf":
+        return f"{detail}, 响应为 HTML 页面"
+    if sample_text and not _is_html_content_type(content_type):
         detail += f", 响应片段 {sample_text[:180]}"
     return detail
+
+
+def response_user_error(
+    *,
+    status_code: int | None = None,
+    content_type: str = "",
+    sample: bytes = b"",
+    headers: Any = None,
+    detail: str | None = None,
+) -> tuple[str, str | None]:
+    """Return a concise actionable error plus a machine-readable category."""
+    failure_kind = classify_response_failure(
+        status_code=status_code,
+        content_type=content_type,
+        sample=sample,
+        headers=headers,
+    )
+    if failure_kind == "cloudflare_challenge":
+        return (
+            "来源被 Cloudflare 防护拦截，未返回 PDF。请打开来源页面完成验证，并在来源页直接下载 PDF。",
+            failure_kind,
+        )
+    if failure_kind == "access_denied":
+        return (
+            f"来源拒绝访问（HTTP {status_code}），未返回 PDF。请打开来源页面查看。",
+            failure_kind,
+        )
+    if failure_kind == "not_pdf":
+        return "来源返回了网页而不是 PDF，请打开来源页面查看。", failure_kind
+    if status_code is not None and status_code < 400:
+        return "来源返回的不是 PDF，请打开来源页面查看。", "not_pdf"
+    return detail or "当前候选来源未能返回 PDF", failure_kind
 
 
 def strip_tags(value: Any) -> str:
@@ -498,21 +599,40 @@ def verify_candidate_url(
             "looksPdf": looks_pdf,
             "durationMs": round((time.monotonic() - started) * 1000),
         }
+        failure_kind = classify_response_failure(
+            status_code=status_code,
+            content_type=content_type,
+            sample=first_chunk,
+            headers=response.headers,
+        )
+        if failure_kind:
+            checked["probe"]["failureKind"] = failure_kind
         detail = response_failure_detail(
             url=url,
             status_code=status_code,
             content_type=content_type,
             sample=first_chunk,
+            headers=response.headers,
         )
-        # A missing object is definitive and must not reach the UI. Access
-        # challenges, rate limits, and transient 5xx/timeouts are different:
-        # the URL may work on an explicit download retry, so retain it as an
-        # unverified fallback with its diagnostic attached.
+        # A browser challenge, access-denied response, or expired object is a
+        # source page, not a PDF fallback. The link-first UI keeps it visible
+        # so the user can open it in a normal browser when appropriate.
         missing_object = status_code in {404, 410} or any(
             marker in first_chunk[:2048].lower()
             for marker in (b"blobnotfound", b"nosuchkey", b"filenotfound", b"not found")
         )
-        if status_code >= 400 and not missing_object:
+        checked["probe"]["missingObject"] = missing_object
+        if failure_kind in {"cloudflare_challenge", "access_denied"}:
+            checked["isPdf"] = False
+            checked["probeStatus"] = "blocked"
+            checked["probeError"] = response_user_error(
+                status_code=status_code,
+                content_type=content_type,
+                sample=first_chunk,
+                headers=response.headers,
+                detail=detail,
+            )[0]
+        elif status_code >= 400 and not missing_object:
             checked["isPdf"] = True
             checked["probeStatus"] = "unverified"
             checked["probeError"] = detail
@@ -523,7 +643,13 @@ def verify_candidate_url(
         elif not looks_pdf:
             checked["isPdf"] = False
             checked["probeStatus"] = "rejected"
-            checked["probeError"] = detail
+            checked["probeError"] = response_user_error(
+                status_code=status_code,
+                content_type=content_type,
+                sample=first_chunk,
+                headers=response.headers,
+                detail=detail,
+            )[0]
         else:
             checked["isPdf"] = True
             checked["probeStatus"] = "verified"
@@ -554,6 +680,7 @@ def verify_pdf_candidates(
     per_candidate_timeout = max(2.0, min(LOCATE_PROBE_TIMEOUT_SECONDS, timeout_seconds / max(1, min(len(pdf_candidates), 4))))
     verified: list[dict[str, Any]] = []
     unverified: list[dict[str, Any]] = []
+    source_pages: list[dict[str, Any]] = []
     candidate_order = {(item.get("source"), item.get("url")): index for index, item in enumerate(pdf_candidates)}
     pool = ThreadPoolExecutor(max_workers=min(len(pdf_candidates), 4))
     future_map = {
@@ -578,6 +705,11 @@ def verify_pdf_candidates(
                         "WARN",
                     )
             else:
+                # Link-first mode keeps every discovered URL visible. Probe
+                # failures are useful annotations, but must not hide a source
+                # that may still work in the user's browser.
+                if checked.get("probeStatus") in {"blocked", "rejected"}:
+                    source_pages.append(checked)
                 engine_log(
                     f"locate rejected {checked.get('source') or 'source'} {safe_url_for_log(checked.get('url'))}: {checked.get('probeError') or 'not a PDF'}",
                     "WARN",
@@ -600,7 +732,11 @@ def verify_pdf_candidates(
         verified + unverified,
         key=lambda item: candidate_order.get((item.get("source"), item.get("url")), len(candidate_order)),
     )
-    return ordered, landing_candidates, len(verified), len(unverified)
+    ordered_pages = sorted(
+        landing_candidates + source_pages,
+        key=lambda item: candidate_order.get((item.get("source"), item.get("url")), len(candidate_order)),
+    )
+    return ordered, ordered_pages, len(verified), len(unverified)
 
 
 class PatchSet:
@@ -828,24 +964,58 @@ def download_route_pdf(
         engine_log(
             f"download response source={source} url={safe_url} status={status_code} content_type={content_type[:100]} first={first_chunk[:12]!r}",
         )
+        failure_kind = classify_response_failure(
+            status_code=status_code,
+            content_type=content_type,
+            sample=first_chunk,
+            headers=response.headers,
+        )
         if status_code >= 400:
             detail = response_failure_detail(
                 url=url,
                 status_code=status_code,
                 content_type=content_type,
                 sample=first_chunk,
+                headers=response.headers,
+            )
+            user_error, failure_kind = response_user_error(
+                status_code=status_code,
+                content_type=content_type,
+                sample=first_chunk,
+                headers=response.headers,
+                detail=detail,
             )
             engine_log(f"download failed source={source} url={safe_url}: {detail}", "WARN")
-            return {"success": False, "source": source, "error": detail, "statusCode": status_code}
+            return {
+                "success": False,
+                "source": source,
+                "error": user_error,
+                "errorCode": failure_kind,
+                "statusCode": status_code,
+            }
         if not first_chunk.startswith(b"%PDF-"):
             detail = response_failure_detail(
                 url=url,
                 status_code=status_code,
                 content_type=content_type,
                 sample=first_chunk,
+                headers=response.headers,
+            )
+            user_error, failure_kind = response_user_error(
+                status_code=status_code,
+                content_type=content_type,
+                sample=first_chunk,
+                headers=response.headers,
+                detail=detail,
             )
             engine_log(f"download rejected non-PDF source={source} url={safe_url}: {detail}", "WARN")
-            return {"success": False, "source": source, "error": f"来源返回的不是 PDF（{detail}）", "statusCode": status_code}
+            return {
+                "success": False,
+                "source": source,
+                "error": user_error,
+                "errorCode": failure_kind or "not_pdf",
+                "statusCode": status_code,
+            }
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = output_path.with_suffix(output_path.suffix + ".part")
@@ -955,6 +1125,8 @@ def download_paper(request: dict[str, Any]) -> dict[str, Any]:
             "url": safe_url_for_log(route["url"]),
             "error": str((result or {}).get("error") or "当前候选来源未能返回 PDF") if isinstance(result, dict) else "当前候选来源未能返回 PDF",
         }
+        if isinstance(result, dict) and result.get("errorCode"):
+            attempt["errorCode"] = str(result["errorCode"])
         if isinstance(result, dict) and result.get("statusCode") is not None:
             attempt["statusCode"] = result["statusCode"]
         attempts.append(attempt)
@@ -963,13 +1135,23 @@ def download_paper(request: dict[str, Any]) -> dict[str, Any]:
             "WARN",
         )
 
-    last_error = attempts[-1].get("error") if attempts else None
+    failure_codes = [str(attempt.get("errorCode") or "") for attempt in attempts]
+    if attempts and failure_codes and all(code == "cloudflare_challenge" for code in failure_codes):
+        final_error = (
+            f"已尝试 {len(attempts)} 个 PDF 来源，均被 Cloudflare 防护拦截，未返回 PDF。"
+            "请打开来源页面完成验证，并在来源页直接下载 PDF。"
+        )
+    elif attempts and failure_codes and all(code in {"cloudflare_challenge", "access_denied"} for code in failure_codes):
+        final_error = f"已尝试 {len(attempts)} 个 PDF 来源，均拒绝了自动访问。请打开来源页面查看后重试。"
+    else:
+        last_error = attempts[-1].get("error") if attempts else None
+        final_error = f"已尝试 {len(attempts)} 个 PDF 来源，均未能获取：{last_error or '请查看来源页面或稍后重试'}"
     return {
         "status": "error",
         "identifier": doi,
         "source": attempts[-1].get("source") if attempts else direct_routes[0]["source"],
         "attemptedSources": attempts,
-        "error": f"已尝试 {len(attempts)} 个 PDF 来源，均未能获取：{last_error or '请查看来源页面或稍后重试'}",
+        "error": final_error,
     }
 
 

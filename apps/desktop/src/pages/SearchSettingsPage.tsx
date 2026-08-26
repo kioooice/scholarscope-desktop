@@ -96,8 +96,8 @@ function SearchSettings({ settings, engineStatus, onUpdate, onCheckEngine }: Pic
         <div className="settings-section__topline">
           <SectionHeading
             icon={<ServerCog size={19} />}
-            title="PDF 下载引擎"
-            detail="按候选队列检查来源，前一个来源失败后自动继续下一个。"
+            title="来源与 PDF 引擎"
+            detail="默认提供来源链接；已验证 PDF 可选择应用内获取，并按队列继续尝试。"
           />
           <div className="settings-status-actions">
             <EngineStatus status={engineStatus} />
@@ -108,11 +108,11 @@ function SearchSettings({ settings, engineStatus, onUpdate, onCheckEngine }: Pic
         </div>
         <div className="settings-toggle-grid">
           <label className="settings-toggle">
-            <span><strong>启用下载引擎</strong><small>允许后台连接 13 个来源。</small></span>
+            <span><strong>启用来源引擎</strong><small>允许后台检查 13 个来源并整理链接。</small></span>
             <input type="checkbox" checked={settings.scansciEnabled} onChange={(event) => onUpdate({ scansciEnabled: event.target.checked })} />
           </label>
           <label className="settings-toggle">
-            <span><strong>自动检查来源</strong><small>检索完成后自动查找可下载 PDF。</small></span>
+            <span><strong>自动检查来源</strong><small>检索完成后自动查找并整理来源链接。</small></span>
             <input type="checkbox" checked={settings.scansciAutoSearch} onChange={(event) => onUpdate({ scansciAutoSearch: event.target.checked })} />
           </label>
           <label className="settings-toggle">
@@ -147,7 +147,7 @@ function SearchSettings({ settings, engineStatus, onUpdate, onCheckEngine }: Pic
               <input type="number" min="5" max="60" step="1" value={Math.round(settings.scansciTimeoutMs / 1000)} onChange={(event) => onUpdate({ scansciTimeoutMs: Math.max(5_000, Math.min(60_000, (Number(event.target.value) || 5) * 1_000)) })} />
               <span>秒</span>
             </div>
-            <small>下载总时限会按此值自动放宽。</small>
+            <small>来源检查和可选应用内获取会按此值分配时限。</small>
           </label>
         </div>
       </section>
@@ -163,8 +163,8 @@ function DownloadSettings({ settings, defaultDownloadDirectory, downloadDirector
     <section className="settings-section">
       <SectionHeading
         icon={<Download size={19} />}
-        title="PDF 保存位置"
-        detail="保存已准备好的 PDF 时，桌面版会使用这里的文件夹。"
+        title="应用内 PDF 保存位置"
+        detail="仅在选择应用内获取 PDF 后，桌面版会使用这里的文件夹。"
       />
       <div className="settings-path-row">
         <div className="settings-path-display" title={effectiveDirectory}>
@@ -194,7 +194,7 @@ function PrivacySettings() {
       <div className="settings-footer-icon"><ShieldCheck size={18} /></div>
       <div>
         <h2>本机数据与隐私</h2>
-        <p>检索配置和下载目录只保存在本机浏览器存储中。PDF 会保存到下载设置显示的文件夹；桌面版默认使用便携包中 ScholarScope.exe 所在的目录。</p>
+        <p>检索配置和下载目录只保存在本机浏览器存储中。通过应用内获取的 PDF 会保存到下载设置显示的文件夹；桌面版默认使用便携包中 ScholarScope.exe 所在的目录。</p>
       </div>
     </section>
   );
@@ -210,7 +210,7 @@ export function SearchSettingsPage({ settings, engineStatus, defaultDownloadDire
           <div>
             <span className="settings-page__eyebrow">ScholarScope / 设置</span>
             <h1>应用设置</h1>
-            <p>检索接口、PDF 来源池和本机保存行为均在此管理，修改会立即保存在本机。</p>
+            <p>检索接口、来源链接和可选的应用内保存行为均在此管理，修改会立即保存在本机。</p>
           </div>
           <button className="settings-reset" type="button" onClick={onReset} title="恢复默认设置">
             <RotateCcw size={15} />恢复默认

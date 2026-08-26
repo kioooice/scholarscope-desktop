@@ -101,6 +101,8 @@ function mapLocateResult(payload: unknown): ScanSciLookupState {
       url: textValue(item.url),
       isPdf: item.isPdf === true,
       routeId: textValue(item.routeId),
+      probeStatus: textValue(item.probeStatus),
+      probeError: textValue(item.probeError),
     })).filter((item) => Boolean(item.url))
     : undefined;
   return {
@@ -109,6 +111,8 @@ function mapLocateResult(payload: unknown): ScanSciLookupState {
     url: textValue(route?.url) || routes?.[0]?.url,
     isPdf: route?.isPdf === true || routes?.[0]?.isPdf === true,
     routeId: textValue(route?.routeId) || textValue(root.routeId) || routes?.[0]?.routeId,
+    probeStatus: textValue(route?.probeStatus) || routes?.[0]?.probeStatus,
+    probeError: textValue(route?.probeError) || routes?.[0]?.probeError,
     routes,
     checkedSources: Number(root.checkedSources) || undefined,
     totalSources: Number(root.totalSources) || undefined,
