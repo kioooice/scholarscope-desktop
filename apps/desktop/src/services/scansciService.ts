@@ -53,18 +53,22 @@ function requestBody(
   paper: Pick<Paper, "title" | "doi">,
   settings: ProviderSettings,
   timeoutMs = settings.scansciTimeoutMs,
-  routeId?: string,
+  routeIds?: string[],
 ): JsonObject {
+  const normalizedRouteIds = Array.from(new Set((routeIds || []).filter((routeId) => Boolean(routeId))));
   return {
     identifier: paper.doi?.trim() || undefined,
     title: paper.title.trim(),
     email: settings.crossrefEmail.trim(),
     timeoutMs,
-    routeId,
+    routeId: normalizedRouteIds[0],
+    routeIds: normalizedRouteIds,
     settings: {
       email: settings.crossrefEmail.trim(),
       strategy: "fastest",
-      scihubEnabled: false,
+      // Include the grey-source candidates in the same queue. The engine will
+      // still verify and fall through them only when earlier sources fail.
+      scihubEnabled: true,
     },
   };
 }
@@ -173,11 +177,17 @@ export const scansciService = {
 
   async downloadPaper(paper: Pick<Paper, "title" | "doi">, settings: ProviderSettings, current?: ScanSciLookupState): Promise<ScanSciLookupState> {
     const timeoutMs = downloadTimeoutMs(settings);
+    const routeIds = Array.from(new Set([
+      ...(current?.routeId ? [current.routeId] : []),
+      ...(current?.routes || [])
+        .filter((route) => route.isPdf === true && typeof route.routeId === "string")
+        .map((route) => route.routeId as string),
+    ]));
     try {
       const response = await fetchInternalApi("/api/papers/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody(paper, settings, timeoutMs, current?.routeId)),
+        body: JSON.stringify(requestBody(paper, settings, timeoutMs, routeIds)),
         signal: AbortSignal.timeout(timeoutMs + DOWNLOAD_TIMEOUT_GRACE_MS),
       });
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";

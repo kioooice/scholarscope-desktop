@@ -96,7 +96,19 @@ describe("integrated paper download engine", () => {
     const result = await scansciService.downloadPaper(
       { title: "Open paper", doi: "10.5555/scansci-oa" },
       settings(),
-      { status: "found", source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true, routeId: "route-core" },
+      {
+        status: "found",
+        source: "CORE",
+        url: "https://repository.example/paper.pdf",
+        isPdf: true,
+        routeId: "route-core",
+        routes: [
+          { source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true, routeId: "route-core" },
+          { source: "Unpaywall", url: "https://oa.example/paper.pdf", isPdf: true, routeId: "route-oa" },
+          { source: "LibGen", url: "https://libgen.example/get.php?id=1", isPdf: true, routeId: "route-libgen" },
+          { source: "Publisher", url: "https://publisher.example/article", isPdf: false, routeId: "route-page" },
+        ],
+      },
     );
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/papers/download");
@@ -105,7 +117,8 @@ describe("integrated paper download engine", () => {
     expect(body).toMatchObject({
       identifier: "10.5555/scansci-oa",
       routeId: "route-core",
-      settings: { scihubEnabled: false },
+      routeIds: ["route-core", "route-oa", "route-libgen"],
+      settings: { scihubEnabled: true },
     });
     expect(body).not.toHaveProperty("route");
   });

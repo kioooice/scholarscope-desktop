@@ -237,7 +237,9 @@ function rememberLocatedRoute(result) {
   pruneLocatedRoutes();
   const remembered = new Map();
   const storeRoute = (route) => {
-    const key = `${route.source}\n${route.url}`;
+    // Several providers can discover the same underlying PDF URL. Keep the
+    // first source label, but never download the identical URL repeatedly.
+    const key = route.url;
     const existing = remembered.get(key);
     if (existing) return existing;
     const routeId = randomUUID();
@@ -246,15 +248,37 @@ function rememberLocatedRoute(result) {
     locatedRoutes.set(routeId, { route, expiresAt: Date.now() + LOCATED_ROUTE_TTL_MS });
     return stored;
   };
-  const routes = listedRoutes.map(storeRoute);
-  const route = primaryRoute ? storeRoute(primaryRoute) : routes[0];
-  return { ...result, route, routes, routeId: route.routeId };
+  const route = primaryRoute ? storeRoute(primaryRoute) : undefined;
+  const routes = [];
+  if (route) routes.push(route);
+  for (const listedRoute of listedRoutes) {
+    const stored = storeRoute(listedRoute);
+    if (!routes.some((item) => item.routeId === stored.routeId)) routes.push(stored);
+  }
+  const selectedRoute = route || routes[0];
+  return selectedRoute ? { ...result, route: selectedRoute, routes, routeId: selectedRoute.routeId } : result;
 }
 
 function getLocatedRoute(routeId) {
   pruneLocatedRoutes();
   if (typeof routeId !== "string") return undefined;
   return locatedRoutes.get(routeId)?.route;
+}
+
+function getLocatedRoutes(routeIds) {
+  if (!Array.isArray(routeIds)) return [];
+  pruneLocatedRoutes();
+  const routes = [];
+  const seen = new Set();
+  for (const routeId of routeIds) {
+    const route = getLocatedRoute(routeId);
+    if (!route) continue;
+    const key = route.url;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    routes.push(route);
+  }
+  return routes;
 }
 
 async function requestIsolatedEngine(method, payload, timeoutMs) {
@@ -303,7 +327,9 @@ function engineSettings(body) {
   const settings = body && typeof body.settings === "object" && body.settings ? body.settings : {};
   return {
     email: typeof body?.email === "string" ? body.email.trim() : typeof settings.email === "string" ? settings.email.trim() : "",
-    scihubEnabled: settings.scihubEnabled === true,
+    // The desktop flow should inspect every configured source by default.
+    // Callers can still opt out explicitly with scihubEnabled: false.
+    scihubEnabled: settings.scihubEnabled !== false,
     useTor: settings.useTor === true,
     strategy: typeof settings.strategy === "string" ? settings.strategy : "fastest",
   };
@@ -382,8 +408,11 @@ async function handleApi(request, response) {
     }
     if (requestUrl.pathname === "/api/papers/download") {
       const downloadTimeoutMs = boundedTimeout(body.timeoutMs, 60_000, 15_000, 90_000);
-      const route = getLocatedRoute(body.routeId);
-      if (!route) {
+      const requestedRouteIds = Array.isArray(body.routeIds)
+        ? body.routeIds.filter((value) => typeof value === "string").slice(0, 128)
+        : typeof body.routeId === "string" ? [body.routeId] : [];
+      const routes = getLocatedRoutes(requestedRouteIds);
+      if (routes.length === 0) {
         jsonResponse(response, 409, { status: "error", error: "下载候选已过期，请重新检索来源" });
         return;
       }
@@ -393,7 +422,7 @@ async function handleApi(request, response) {
         title: body.title,
         email: body.email,
         settings: engineSettings(body),
-        route,
+        routes,
         outputDir: path.join(dataDir, "papers"),
         timeoutMs: downloadTimeoutMs,
       }, downloadTimeoutMs + 5_000));

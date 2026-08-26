@@ -28,7 +28,6 @@ import requests
 DOI_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$", re.I)
 DEFAULT_SOURCE_COUNT = 13
 LOCATE_PROBE_TIMEOUT_SECONDS = 8.0
-LOCATE_MAX_CANDIDATES = 8
 SOURCE_PRIORITY = {
     "plosdirect": 0,
     "unpaywall": 1,
@@ -86,8 +85,7 @@ def apply_source_limits(config: dict[str, Any], request: dict[str, Any], timeout
     return settings
 
 
-def located_route(request: dict[str, Any]) -> dict[str, Any] | None:
-    route = request.get("route")
+def normalize_route(route: Any) -> dict[str, Any] | None:
     if not isinstance(route, dict):
         return None
     url = route.get("url")
@@ -101,6 +99,28 @@ def located_route(request: dict[str, Any]) -> dict[str, Any] | None:
         "url": url.strip(),
         "isPdf": route.get("isPdf") is True,
     }
+
+
+def located_routes(request: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the ordered, validated route queue sent by the desktop app."""
+    raw_routes = request.get("routes")
+    if not isinstance(raw_routes, list):
+        raw_routes = [request.get("route")]
+    routes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_route in raw_routes:
+        route = normalize_route(raw_route)
+        if not route:
+            continue
+        # Different metadata providers often point to the same PDF URL. One
+        # network attempt is enough; keeping duplicates would waste the queue
+        # budget and make the same failure look like several sources failed.
+        key = route["url"]
+        if key in seen:
+            continue
+        seen.add(key)
+        routes.append(route)
+    return routes
 
 
 def candidate_output_path(doi: str, output_dir: Any, config: dict[str, Any]) -> Path:
@@ -618,9 +638,11 @@ def install_probe_patches(patches: PatchSet, recorder: ProbeRecorder) -> None:
     strategies = importlib.import_module("scansci_pdf.publisher_strategies")
     browser_engine = importlib.import_module("scansci_pdf.browser_engine")
 
-    def probe_download(url: str, output_path: Path, config: dict[str, Any], source: str, **_: Any) -> dict[str, Any]:
+    def probe_download(url: str, output_path: Path, config: dict[str, Any], source: str, **_: Any) -> dict[str, Any] | None:
         recorder.add(url, source=source, kind="pdf", is_pdf=True)
-        return {"success": True, "file": str(output_path), "source": source}
+        # Source functions stop enumerating when the download result is truthy.
+        # Keep it falsey here so every mirror/domain can be collected.
+        return None
 
     for module in source_modules():
         if hasattr(module, "download_pdf"):
@@ -629,7 +651,7 @@ def install_probe_patches(patches: PatchSet, recorder: ProbeRecorder) -> None:
 
     def probe_http(url: str, *_: Any, **__: Any) -> bool:
         recorder.add(url, kind="pdf", is_pdf=True)
-        return True
+        return False
 
     def probe_browser(*args: Any, **kwargs: Any) -> bool:
         url = args[1] if len(args) > 1 and isinstance(args[1], str) else kwargs.get("article_url")
@@ -728,7 +750,9 @@ def locate_sources(doi: str, request: dict[str, Any]) -> dict[str, Any]:
         "status": "found" if route else "not-found",
         "identifier": doi,
         "route": route,
-        "routes": candidates[:LOCATE_MAX_CANDIDATES],
+        # Keep the complete ordered queue so download can advance after a
+        # failed candidate instead of repeating the first URL.
+        "routes": candidates,
         "checkedSources": len(source_names),
         "totalSources": len(source_names) or DEFAULT_SOURCE_COUNT,
         "sourceNames": source_names,
@@ -871,46 +895,81 @@ def download_paper(request: dict[str, Any]) -> dict[str, Any]:
     )
     config = sources.load_config().copy()
     settings = apply_source_limits(config, request, timeout_seconds)
-    route = located_route(request)
-    if not route:
+    routes = located_routes(request)
+    if not routes:
         return {"status": "error", "identifier": doi, "error": "下载候选已过期，请重新检索来源"}
-    if not route["isPdf"]:
+
+    output_path = candidate_output_path(doi, request.get("outputDir"), config)
+    direct_routes = [route for route in routes if route["isPdf"]]
+    landing_routes = [route for route in routes if not route["isPdf"]]
+    if not direct_routes:
+        source = landing_routes[0]["source"] if landing_routes else "下载来源"
         return {
             "status": "error",
             "identifier": doi,
-            "source": route["source"],
+            "source": source,
+            "attemptedSources": [],
             "error": "当前候选来源未提供可直接下载的 PDF，请查看来源页面",
         }
 
-    output_path = candidate_output_path(doi, request.get("outputDir"), config)
-    # Download exactly the route shown in the UI. Do not start another source
-    # race here, otherwise a Sci-Hub/LibGen fallback can replace that route.
-    result = download_route_pdf(
-        route["url"],
-        output_path,
-        config,
-        route["source"],
-        use_tor=settings.get("useTor") is True,
-    )
-    if not isinstance(result, dict):
-        return {
-            "status": "error",
-            "identifier": doi,
+    attempts: list[dict[str, Any]] = []
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    for index, route in enumerate(direct_routes):
+        remaining = deadline - time.monotonic()
+        if remaining < 1.0:
+            attempts.append({
+                "source": route["source"],
+                "url": safe_url_for_log(route["url"]),
+                "error": "下载总时限已用尽",
+            })
+            break
+
+        # Divide the remaining budget across routes. Fast 404/403 responses
+        # move on immediately, while a valid PDF still gets a useful window.
+        routes_left = len(direct_routes) - index
+        route_timeout = max(1.0, min(20.0, remaining / max(1, routes_left)))
+        route_config = dict(config)
+        route_config["connect_timeout"] = max(1, min(10, int(route_timeout // 3) or 1))
+        route_config["read_timeout"] = max(1, min(20, int(route_timeout)))
+        engine_log(
+            f"download queue attempt {index + 1}/{len(direct_routes)} source={route['source']} url={safe_url_for_log(route['url'])}",
+        )
+        result = download_route_pdf(
+            route["url"],
+            output_path,
+            route_config,
+            route["source"],
+            use_tor=settings.get("useTor") is True,
+        )
+        if isinstance(result, dict) and result.get("success"):
+            return {
+                "status": "downloaded",
+                "identifier": doi,
+                "source": result.get("source") or route["source"],
+                "filePath": str(result.get("file") or ""),
+                "attemptedSources": attempts,
+            }
+        attempt = {
             "source": route["source"],
-            "error": "当前候选来源未能返回 PDF，请查看来源页面或稍后重试",
+            "url": safe_url_for_log(route["url"]),
+            "error": str((result or {}).get("error") or "当前候选来源未能返回 PDF") if isinstance(result, dict) else "当前候选来源未能返回 PDF",
         }
-    if result.get("success"):
-        return {
-            "status": "downloaded",
-            "identifier": doi,
-            "source": result.get("source") or route["source"],
-            "filePath": str(result.get("file") or ""),
-        }
+        if isinstance(result, dict) and result.get("statusCode") is not None:
+            attempt["statusCode"] = result["statusCode"]
+        attempts.append(attempt)
+        engine_log(
+            f"download queue moving on after source={route['source']}: {attempt['error']}",
+            "WARN",
+        )
+
+    last_error = attempts[-1].get("error") if attempts else None
     return {
         "status": "error",
         "identifier": doi,
-        "source": route["source"],
-        "error": str(result.get("error") or result.get("message") or "当前候选来源未能返回 PDF，请查看来源页面或稍后重试"),
+        "source": attempts[-1].get("source") if attempts else direct_routes[0]["source"],
+        "attemptedSources": attempts,
+        "error": f"已尝试 {len(attempts)} 个 PDF 来源，均未能获取：{last_error or '请查看来源页面或稍后重试'}",
     }
 
 
