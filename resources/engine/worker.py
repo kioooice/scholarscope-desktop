@@ -2,8 +2,8 @@
 
 The worker owns the ScanSci source implementations but does not expose their
 web or MCP interfaces. Node talks to this process over JSON Lines. Locate
-requests only resolve metadata and source URLs; the PDF downloader runs only
-for an explicit download request.
+requests resolve metadata and verify lightweight source responses; the full
+PDF downloader runs only for an explicit download request.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
@@ -27,6 +27,8 @@ import requests
 
 DOI_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$", re.I)
 DEFAULT_SOURCE_COUNT = 13
+LOCATE_PROBE_TIMEOUT_SECONDS = 8.0
+LOCATE_MAX_CANDIDATES = 8
 SOURCE_PRIORITY = {
     "plosdirect": 0,
     "unpaywall": 1,
@@ -106,6 +108,39 @@ def candidate_output_path(doi: str, output_dir: Any, config: dict[str, Any]) -> 
     target_dir.mkdir(parents=True, exist_ok=True)
     filename = re.sub(r"[^A-Za-z0-9._-]+", "_", doi).strip("._")[:180] or "paper"
     return target_dir / f"{filename}.pdf"
+
+
+def safe_url_for_log(url: Any) -> str:
+    """Keep diagnostics useful without dumping long signed query strings."""
+    if not isinstance(url, str):
+        return ""
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return url[:240]
+    path = parsed.path or "/"
+    if len(path) > 180:
+        path = f"{path[:177]}..."
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+def response_failure_detail(
+    *,
+    url: str,
+    status_code: int | None = None,
+    content_type: str = "",
+    sample: bytes = b"",
+    error: Exception | None = None,
+) -> str:
+    """Build a short diagnostic that can be shown in the engine log/UI."""
+    if error is not None:
+        return f"{type(error).__name__}: {str(error)[:180]}"
+    sample_text = re.sub(r"\s+", " ", sample[:240].decode("utf-8", errors="replace")).strip()
+    detail = f"HTTP {status_code}" if status_code is not None else "无 HTTP 状态"
+    if content_type:
+        detail += f", Content-Type {content_type[:100]}"
+    if sample_text:
+        detail += f", 响应片段 {sample_text[:180]}"
+    return detail
 
 
 def strip_tags(value: Any) -> str:
@@ -401,6 +436,153 @@ class ProbeRecorder:
             return sorted(self._candidates, key=candidate_key)
 
 
+def engine_log(message: str, level: str = "INFO") -> None:
+    """Write engine diagnostics to stderr, which the desktop app persists."""
+    print(f"[{level}] {message}", file=sys.stderr, flush=True)
+
+
+def verify_candidate_url(
+    candidate: dict[str, Any],
+    config: dict[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Perform a small streamed request before exposing a PDF candidate.
+
+    Source implementations often obtain a URL from metadata and return it
+    before the URL has been checked. A signed repository URL can expire between
+    those two steps, so locating must reject HTTP errors and non-PDF bodies.
+    """
+    from scansci_pdf.network import fetch
+
+    checked = dict(candidate)
+    url = str(candidate.get("url") or "")
+    started = time.monotonic()
+    probe_config = dict(config)
+    probe_config["connect_timeout"] = max(2, min(int(timeout_seconds), int(LOCATE_PROBE_TIMEOUT_SECONDS)))
+    probe_config["read_timeout"] = max(3, min(int(timeout_seconds), int(LOCATE_PROBE_TIMEOUT_SECONDS)))
+    response: requests.Response | None = None
+    try:
+        response = fetch(
+            url,
+            probe_config,
+            headers={"Accept": "application/pdf,*/*"},
+            stream=True,
+        )
+        content_type = response.headers.get("content-type", "")
+        first_chunk = next(response.iter_content(chunk_size=4096), b"")
+        status_code = int(response.status_code)
+        looks_pdf = first_chunk.startswith(b"%PDF-")
+        checked["probe"] = {
+            "statusCode": status_code,
+            "contentType": content_type[:120],
+            "looksPdf": looks_pdf,
+            "durationMs": round((time.monotonic() - started) * 1000),
+        }
+        detail = response_failure_detail(
+            url=url,
+            status_code=status_code,
+            content_type=content_type,
+            sample=first_chunk,
+        )
+        # A missing object is definitive and must not reach the UI. Access
+        # challenges, rate limits, and transient 5xx/timeouts are different:
+        # the URL may work on an explicit download retry, so retain it as an
+        # unverified fallback with its diagnostic attached.
+        missing_object = status_code in {404, 410} or any(
+            marker in first_chunk[:2048].lower()
+            for marker in (b"blobnotfound", b"nosuchkey", b"filenotfound", b"not found")
+        )
+        if status_code >= 400 and not missing_object:
+            checked["isPdf"] = True
+            checked["probeStatus"] = "unverified"
+            checked["probeError"] = detail
+        elif status_code >= 400:
+            checked["isPdf"] = False
+            checked["probeStatus"] = "rejected"
+            checked["probeError"] = detail
+        elif not looks_pdf:
+            checked["isPdf"] = False
+            checked["probeStatus"] = "rejected"
+            checked["probeError"] = detail
+        else:
+            checked["isPdf"] = True
+            checked["probeStatus"] = "verified"
+        return checked
+    except Exception as exc:
+        checked["isPdf"] = True
+        checked["probeStatus"] = "unverified"
+        checked["probe"] = {
+            "durationMs": round((time.monotonic() - started) * 1000),
+        }
+        checked["probeError"] = response_failure_detail(url=url, error=exc)
+        return checked
+    finally:
+        if response is not None:
+            response.close()
+
+
+def verify_pdf_candidates(
+    candidates: list[dict[str, Any]],
+    config: dict[str, Any],
+    timeout_seconds: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
+    pdf_candidates = [item for item in candidates if item.get("isPdf")]
+    landing_candidates = [item for item in candidates if not item.get("isPdf")]
+    if not pdf_candidates:
+        return [], landing_candidates, 0, 0
+
+    per_candidate_timeout = max(2.0, min(LOCATE_PROBE_TIMEOUT_SECONDS, timeout_seconds / max(1, min(len(pdf_candidates), 4))))
+    verified: list[dict[str, Any]] = []
+    unverified: list[dict[str, Any]] = []
+    candidate_order = {(item.get("source"), item.get("url")): index for index, item in enumerate(pdf_candidates)}
+    pool = ThreadPoolExecutor(max_workers=min(len(pdf_candidates), 4))
+    future_map = {
+        pool.submit(verify_candidate_url, item, config, per_candidate_timeout): item
+        for item in pdf_candidates
+    }
+    try:
+        done, pending = wait(future_map, timeout=max(2.0, min(LOCATE_PROBE_TIMEOUT_SECONDS, timeout_seconds)))
+        for future in done:
+            candidate = future_map[future]
+            try:
+                checked = future.result()
+            except Exception as exc:
+                checked = {**candidate, "isPdf": True, "probeStatus": "unverified", "probeError": response_failure_detail(url=str(candidate.get("url") or ""), error=exc)}
+            if checked.get("isPdf"):
+                if checked.get("probeStatus") == "verified":
+                    verified.append(checked)
+                else:
+                    unverified.append(checked)
+                    engine_log(
+                        f"locate kept unverified {checked.get('source') or 'source'} {safe_url_for_log(checked.get('url'))}: {checked.get('probeError') or 'probe incomplete'}",
+                        "WARN",
+                    )
+            else:
+                engine_log(
+                    f"locate rejected {checked.get('source') or 'source'} {safe_url_for_log(checked.get('url'))}: {checked.get('probeError') or 'not a PDF'}",
+                    "WARN",
+                )
+        for future in pending:
+            candidate = future_map[future]
+            unverified.append({
+                **candidate,
+                "isPdf": True,
+                "probeStatus": "unverified",
+                "probeError": f"候选校验超时（>{per_candidate_timeout:.1f}s）",
+            })
+            engine_log(
+                f"locate kept unverified {candidate.get('source') or 'source'} {safe_url_for_log(candidate.get('url'))}: probe timeout",
+                "WARN",
+            )
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    ordered = sorted(
+        verified + unverified,
+        key=lambda item: candidate_order.get((item.get("source"), item.get("url")), len(candidate_order)),
+    )
+    return ordered, landing_candidates, len(verified), len(unverified)
+
+
 class PatchSet:
     def __init__(self) -> None:
         self._originals: list[tuple[Any, str, Any]] = []
@@ -503,37 +685,50 @@ def locate_sources(doi: str, request: dict[str, Any]) -> dict[str, Any]:
         output_path = probe_dir / f"{os.getpid()}_{threading.get_ident()}_{label}.pdf"
         try:
             source_fn(doi, output_path, config)
-        except Exception:
-            # A failing source is recorded by the caller through the absence
-            # of a candidate; one source must not prevent the remaining race.
-            pass
+        except Exception as exc:
+            # One source must not prevent the remaining race, but keep the
+            # concrete exception in the persisted engine log.
+            engine_log(f"locate source {label} failed: {type(exc).__name__}: {str(exc)[:180]}", "WARN")
 
+    deadline = time.monotonic() + timeout_seconds
+    pool = ThreadPoolExecutor(max_workers=max(1, min(len(source_pairs), 16)))
+    futures = [pool.submit(run_source, source_fn, label) for source_fn, label in source_pairs]
     try:
-        with ThreadPoolExecutor(max_workers=max(1, min(len(source_pairs), 16))) as pool:
-            futures = [pool.submit(run_source, source_fn, label) for source_fn, label in source_pairs]
-            deadline = time.monotonic() + timeout_seconds
-            for future in as_completed(futures):
+        pending = set(futures)
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                engine_log(f"locate source budget exhausted after {timeout_seconds:.1f}s", "WARN")
+                break
+            done, pending = wait(pending, timeout=remaining)
+            for future in done:
                 try:
                     future.result()
-                except Exception:
-                    pass
-                if time.monotonic() >= deadline:
-                    for pending in futures:
-                        pending.cancel()
-                    break
+                except Exception as exc:
+                    engine_log(f"locate source failed: {type(exc).__name__}: {str(exc)[:160]}", "WARN")
     finally:
+        for future in futures:
+            future.cancel()
+        # A timed-out source is isolated in the per-operation worker process;
+        # do not hold the JSON response open while a browser source unwinds.
+        pool.shutdown(wait=False, cancel_futures=True)
         patches.restore()
 
-    candidates = recorder.candidates()
-    # Remove internal timestamps before crossing the process boundary.
-    for candidate in candidates:
+    raw_candidates = recorder.candidates()
+    for candidate in raw_candidates:
         candidate.pop("foundAt", None)
+    remaining_seconds = max(2.0, min(8.0, deadline - time.monotonic()))
+    pdf_candidates, landing_candidates, verified_count, unverified_count = verify_pdf_candidates(raw_candidates, config, remaining_seconds)
+    candidates = pdf_candidates + landing_candidates
     route = candidates[0] if candidates else None
+    engine_log(
+        f"locate {doi}: {verified_count} verified PDF candidate(s), {unverified_count} unverified fallback(s), {len(landing_candidates)} source page(s)",
+    )
     return {
         "status": "found" if route else "not-found",
         "identifier": doi,
         "route": route,
-        "routes": candidates[:8],
+        "routes": candidates[:LOCATE_MAX_CANDIDATES],
         "checkedSources": len(source_names),
         "totalSources": len(source_names) or DEFAULT_SOURCE_COUNT,
         "sourceNames": source_names,
@@ -578,9 +773,91 @@ def locate(request: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def download_route_pdf(
+    url: str,
+    output_path: Path,
+    config: dict[str, Any],
+    source: str,
+    *,
+    use_tor: bool = False,
+) -> dict[str, Any]:
+    """Download one user-selected route while preserving HTTP diagnostics."""
+    from scansci_pdf.network import fetch
+    from scansci_pdf.pdf_utils import is_pdf_file, success
+
+    started = time.monotonic()
+    response: requests.Response | None = None
+    safe_url = safe_url_for_log(url)
+    try:
+        engine_log(f"download start source={source} url={safe_url}")
+        response = fetch(
+            url,
+            config,
+            headers={"Accept": "application/pdf,*/*"},
+            stream=True,
+            use_tor=use_tor,
+        )
+        content_type = response.headers.get("content-type", "")
+        iterator = response.iter_content(chunk_size=8192)
+        first_chunk = next(iterator, b"")
+        status_code = int(response.status_code)
+        engine_log(
+            f"download response source={source} url={safe_url} status={status_code} content_type={content_type[:100]} first={first_chunk[:12]!r}",
+        )
+        if status_code >= 400:
+            detail = response_failure_detail(
+                url=url,
+                status_code=status_code,
+                content_type=content_type,
+                sample=first_chunk,
+            )
+            engine_log(f"download failed source={source} url={safe_url}: {detail}", "WARN")
+            return {"success": False, "source": source, "error": detail, "statusCode": status_code}
+        if not first_chunk.startswith(b"%PDF-"):
+            detail = response_failure_detail(
+                url=url,
+                status_code=status_code,
+                content_type=content_type,
+                sample=first_chunk,
+            )
+            engine_log(f"download rejected non-PDF source={source} url={safe_url}: {detail}", "WARN")
+            return {"success": False, "source": source, "error": f"来源返回的不是 PDF（{detail}）", "statusCode": status_code}
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = output_path.with_suffix(output_path.suffix + ".part")
+        try:
+            with tmp_path.open("wb") as fh:
+                fh.write(first_chunk)
+                for chunk in iterator:
+                    if chunk:
+                        fh.write(chunk)
+            tmp_path.replace(output_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+        if not is_pdf_file(output_path):
+            output_path.unlink(missing_ok=True)
+            detail = "响应以 PDF 头开始，但文件校验未通过（可能下载不完整）"
+            engine_log(f"download failed source={source} url={safe_url}: {detail}", "WARN")
+            return {"success": False, "source": source, "error": detail, "statusCode": status_code}
+
+        result = success(output_path.stem, output_path, source)
+        engine_log(
+            f"download success source={source} url={safe_url} bytes={output_path.stat().st_size} duration_ms={round((time.monotonic() - started) * 1000)}",
+        )
+        return result
+    except Exception as exc:
+        detail = response_failure_detail(url=url, error=exc)
+        engine_log(f"download exception source={source} url={safe_url}: {detail}", "WARN")
+        return {"success": False, "source": source, "error": detail}
+    finally:
+        if response is not None:
+            response.close()
+
+
 def download_paper(request: dict[str, Any]) -> dict[str, Any]:
     from scansci_pdf import sources
-    from scansci_pdf.pdf_utils import download_pdf
 
     doi, error = resolve_identifier(request)
     if error:
@@ -608,12 +885,11 @@ def download_paper(request: dict[str, Any]) -> dict[str, Any]:
     output_path = candidate_output_path(doi, request.get("outputDir"), config)
     # Download exactly the route shown in the UI. Do not start another source
     # race here, otherwise a Sci-Hub/LibGen fallback can replace that route.
-    result = download_pdf(
+    result = download_route_pdf(
         route["url"],
         output_path,
         config,
         route["source"],
-        require_pdf_like_url=False,
         use_tor=settings.get("useTor") is True,
     )
     if not isinstance(result, dict):
