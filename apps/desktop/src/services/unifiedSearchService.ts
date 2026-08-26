@@ -110,9 +110,10 @@ function tokens(value: string): string[] {
 
 function scorePaper(paper: UnifiedPaper, query: string): number {
   const queryTokens = tokens(query);
+  const normalizedQuery = normalizeTitle(query);
   const title = normalizeTitle(paper.title);
   const abstract = normalizeTitle(paper.abstract);
-  const exactTitleBoost = title.includes(normalizeTitle(query)) ? 60 : 0;
+  const exactTitleBoost = title === normalizedQuery ? 120 : title.includes(normalizedQuery) ? 28 : 0;
   const titleHits = queryTokens.reduce((score, token) => score + (title.includes(token) ? 14 : 0), 0);
   const abstractHits = queryTokens.reduce((score, token) => score + (abstract.includes(token) ? 3 : 0), 0);
   const sourceBoost = Math.min(18, paper.sourceProviders.length * 6);

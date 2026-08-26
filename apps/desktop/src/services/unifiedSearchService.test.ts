@@ -68,4 +68,20 @@ describe("unified literature merge", () => {
     expect(results).toHaveLength(1);
     expect(results[0].doi).toBe("10.1000/abc");
   });
+
+  it("prefers an exact title over a longer title containing the same query", () => {
+    const results = mergeAndRank([
+      paper("Crossref", {
+        title: "Alkaline Noncyanide Zinc Plating with Reuse of Recovered Chemicals",
+        abstract: "A detailed abstract is available for this related title.",
+      }),
+      paper("OpenAlex", {
+        title: "Alkaline noncyanide zinc plating",
+        citationCount: 10,
+      }),
+    ], "Alkaline noncyanide zinc plating", filters);
+
+    expect(results[0].title).toBe("Alkaline noncyanide zinc plating");
+    expect(results[0].relevanceScore).toBeGreaterThan(results[1].relevanceScore);
+  });
 });
