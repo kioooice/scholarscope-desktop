@@ -1,9 +1,7 @@
 import {
   CheckCircle2,
-  Cpu,
   Database,
   Download,
-  KeyRound,
   RefreshCw,
   RotateCcw,
   ServerCog,
@@ -181,51 +179,6 @@ export function SearchSettingsPage({ settings, engineStatus, onUpdate, onReset, 
               </div>
               <small>下载总时限会按此值自动放宽。</small>
             </label>
-          </div>
-        </section>
-
-        <section className="settings-section">
-          <SectionHeading
-            icon={<Cpu size={19} />}
-            title="AI 后台"
-            detail="用于语义扩展、证据判断和答案整理，不影响基础检索。"
-          />
-          <div className="settings-field-grid">
-            <label className="settings-field">
-              <span>AI 服务</span>
-              <select
-                value={settings.aiProvider}
-                onChange={(event) => {
-                  const provider = event.target.value as ProviderSettings["aiProvider"];
-                  if (provider === "openai") onUpdate({ aiProvider: provider, aiBaseUrl: "https://api.openai.com/v1" });
-                  else if (provider === "ollama") onUpdate({ aiProvider: provider, aiBaseUrl: "http://127.0.0.1:11434/v1", aiModel: settings.aiModel || "llama3.2" });
-                  else onUpdate({ aiProvider: provider });
-                }}
-              >
-                <option value="off">关闭</option>
-                <option value="openai">OpenAI</option>
-                <option value="ollama">本地 Ollama</option>
-                <option value="compatible">OpenAI 兼容服务</option>
-              </select>
-            </label>
-            <label className="settings-field">
-              <span>服务 Base URL</span>
-              <input type="url" value={settings.aiBaseUrl} onChange={(event) => onUpdate({ aiBaseUrl: event.target.value })} placeholder="https://api.openai.com/v1" />
-            </label>
-            <label className="settings-field">
-              <span>模型</span>
-              <input value={settings.aiModel} onChange={(event) => onUpdate({ aiModel: event.target.value })} placeholder="gpt-5.5 / llama3.2" />
-            </label>
-            <label className="settings-field">
-              <span><KeyRound size={14} />AI API Key</span>
-              <input type="password" value={settings.aiApiKey} onChange={(event) => onUpdate({ aiApiKey: event.target.value })} placeholder="本机保存，可留空" />
-            </label>
-          </div>
-          <div className="settings-toggle-grid settings-toggle-grid--ai">
-            <label className="settings-toggle"><span><strong>语义扩展</strong><small>扩展查询含义后再检索。</small></span><input type="checkbox" checked={settings.aiSemanticExpansion} onChange={(event) => onUpdate({ aiSemanticExpansion: event.target.checked })} /></label>
-            <label className="settings-toggle"><span><strong>证据标签</strong><small>标记支持、反驳或中立证据。</small></span><input type="checkbox" checked={settings.aiEvidenceLabels} onChange={(event) => onUpdate({ aiEvidenceLabels: event.target.checked })} /></label>
-            <label className="settings-toggle"><span><strong>答案整理</strong><small>根据检索结果生成结构化回答。</small></span><input type="checkbox" checked={settings.aiAnswerSynthesis} onChange={(event) => onUpdate({ aiAnswerSynthesis: event.target.checked })} /></label>
-            <label className="settings-toggle"><span><strong>质量校验</strong><small>提取期刊、引用和披露信号。</small></span><input type="checkbox" checked={settings.aiQualityValidation} onChange={(event) => onUpdate({ aiQualityValidation: event.target.checked })} /></label>
           </div>
         </section>
 
