@@ -3,6 +3,9 @@ import type { ScanSciLookupState, UnifiedPaper } from "../types/search";
 import { fetchInternalApi } from "./internalApi";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const MIN_DOWNLOAD_TIMEOUT_MS = 15_000;
+const MAX_DOWNLOAD_TIMEOUT_MS = 90_000;
+const DOWNLOAD_TIMEOUT_GRACE_MS = 5_000;
 const lookupCache = new Map<string, { expiresAt: number; result: ScanSciLookupState }>();
 const lookupInFlight = new Map<string, Promise<ScanSciLookupState>>();
 
@@ -46,21 +49,42 @@ async function requestJson<T>(path: string, init: RequestInit, timeoutMs: number
   }
 }
 
-function requestBody(paper: Pick<Paper, "title" | "doi">, settings: ProviderSettings): JsonObject {
+function requestBody(
+  paper: Pick<Paper, "title" | "doi">,
+  settings: ProviderSettings,
+  timeoutMs = settings.scansciTimeoutMs,
+  routeId?: string,
+): JsonObject {
   return {
     identifier: paper.doi?.trim() || undefined,
     title: paper.title.trim(),
     email: settings.crossrefEmail.trim(),
-    timeoutMs: settings.scansciTimeoutMs,
+    timeoutMs,
+    routeId,
     settings: {
       email: settings.crossrefEmail.trim(),
       strategy: "fastest",
+      scihubEnabled: false,
     },
   };
 }
 
 function paperCacheKey(paper: Pick<Paper, "title" | "doi">): string {
   return paper.doi?.trim().toLowerCase() || paper.title.trim().toLowerCase();
+}
+
+export function downloadTimeoutMs(settings: ProviderSettings): number {
+  const requested = Math.round(settings.scansciTimeoutMs * 3);
+  return Math.max(MIN_DOWNLOAD_TIMEOUT_MS, Math.min(MAX_DOWNLOAD_TIMEOUT_MS, requested));
+}
+
+function retryableDownloadFailure(current: ScanSciLookupState | undefined, error: string): ScanSciLookupState {
+  return {
+    ...(current || { status: "error" as const }),
+    status: current?.status === "found" ? "found" : "error",
+    downloadStatus: "error",
+    error,
+  };
 }
 
 function mapLocateResult(payload: unknown): ScanSciLookupState {
@@ -71,6 +95,7 @@ function mapLocateResult(payload: unknown): ScanSciLookupState {
       source: textValue(item.source),
       url: textValue(item.url),
       isPdf: item.isPdf === true,
+      routeId: textValue(item.routeId),
     })).filter((item) => Boolean(item.url))
     : undefined;
   return {
@@ -78,6 +103,7 @@ function mapLocateResult(payload: unknown): ScanSciLookupState {
     source: textValue(route?.source) || routes?.[0]?.source,
     url: textValue(route?.url) || routes?.[0]?.url,
     isPdf: route?.isPdf === true || routes?.[0]?.isPdf === true,
+    routeId: textValue(route?.routeId) || textValue(root.routeId) || routes?.[0]?.routeId,
     routes,
     checkedSources: Number(root.checkedSources) || undefined,
     totalSources: Number(root.totalSources) || undefined,
@@ -146,12 +172,13 @@ export const scansciService = {
   },
 
   async downloadPaper(paper: Pick<Paper, "title" | "doi">, settings: ProviderSettings, current?: ScanSciLookupState): Promise<ScanSciLookupState> {
+    const timeoutMs = downloadTimeoutMs(settings);
     try {
       const response = await fetchInternalApi("/api/papers/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody(paper, settings)),
-        signal: AbortSignal.timeout(settings.scansciTimeoutMs * 45),
+        body: JSON.stringify(requestBody(paper, settings, timeoutMs, current?.routeId)),
+        signal: AbortSignal.timeout(timeoutMs + DOWNLOAD_TIMEOUT_GRACE_MS),
       });
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
       if (!response.ok || !contentType.includes("application/pdf")) {
@@ -162,10 +189,10 @@ export const scansciService = {
         } catch {
           // Keep the generic message for non-JSON failures.
         }
-        return { ...(current || { status: "found" }), status: "error", downloadStatus: "error", error: detail };
+        return retryableDownloadFailure(current, detail);
       }
       const url = createPdfObjectUrl(await response.blob());
-      if (!url) return { ...(current || { status: "found" }), status: "error", downloadStatus: "error", error: "浏览器不支持保存 PDF" };
+      if (!url) return retryableDownloadFailure(current, "浏览器不支持保存 PDF");
       const source = response.headers.get("x-scholarscope-source") || current?.source;
       return {
         ...(current || { status: "found" }),
@@ -176,7 +203,7 @@ export const scansciService = {
         downloadStatus: "ready",
       };
     } catch (error) {
-      return { ...(current || { status: "found" }), status: "error", downloadStatus: "error", error: safeError(error) };
+      return retryableDownloadFailure(current, safeError(error));
     }
   },
 

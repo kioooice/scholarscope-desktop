@@ -1,5 +1,6 @@
 import { createServer, request as httpRequest } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, createReadStream, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -23,8 +24,12 @@ let frontendProcess;
 let frontendServer;
 let apiServer;
 let engineWorker;
+let enginePrepared;
 let engineState = { status: "starting", sourceCount: 13 };
 let shuttingDown = false;
+const operationWorkers = new Set();
+const locatedRoutes = new Map();
+const LOCATED_ROUTE_TTL_MS = 30 * 60_000;
 
 function log(message) {
   console.log(`[ScholarScope] ${message}`);
@@ -100,10 +105,12 @@ function prepareEngine() {
 }
 
 class EngineWorker {
-  constructor(prepared) {
+  constructor(prepared, { reportAvailability = true } = {}) {
     this.pending = new Map();
     this.nextId = 1;
     this.buffer = "";
+    this.reportAvailability = reportAvailability;
+    this.stopped = false;
     this.child = spawn(prepared.command, [...prepared.args, workerPath], {
       cwd: rootDir,
       env: {
@@ -124,17 +131,17 @@ class EngineWorker {
       if (message) log(`engine: ${message}`);
     });
     this.child.once("error", (error) => {
-      if (!shuttingDown) {
+      if (!shuttingDown && !this.stopped && this.reportAvailability) {
         engineState = { ...engineState, status: "unavailable", error: error instanceof Error ? error.message : String(error) };
         log(`Internal engine process failed: ${engineState.error}`);
       }
       this.failPending(error);
     });
     this.child.once("exit", (code, signal) => {
-      if (!shuttingDown) {
+      if (!shuttingDown && !this.stopped && this.reportAvailability) {
         engineState = { ...engineState, status: "unavailable", error: `engine exited (${code ?? signal ?? "unknown"})` };
-        this.failPending(new Error("内部下载引擎已退出"));
       }
+      this.failPending(new Error("内部下载引擎已退出"));
     });
   }
 
@@ -183,12 +190,82 @@ class EngineWorker {
   }
 
   stop() {
+    this.stopped = true;
+    this.failPending(new Error("内部下载引擎已停止"));
     if (!this.child || this.child.exitCode !== null) return;
     if (isWindows && this.child.pid) {
       spawnSync("taskkill", ["/pid", String(this.child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
     } else {
       this.child.kill("SIGTERM");
     }
+  }
+}
+
+function boundedTimeout(value, fallbackMs, minimumMs, maximumMs) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallbackMs;
+  return Math.max(minimumMs, Math.min(maximumMs, Math.round(parsed)));
+}
+
+function normalizeLocatedRoute(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = (typeof value.source === "string" ? value.source.trim().slice(0, 120) : "") || "下载来源";
+  const rawUrl = typeof value.url === "string" ? value.url.trim() : "";
+  if (!rawUrl || rawUrl.length > 4_000) return undefined;
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return { source, url: url.toString(), isPdf: value.isPdf === true };
+  } catch {
+    return undefined;
+  }
+}
+
+function pruneLocatedRoutes() {
+  const now = Date.now();
+  for (const [id, entry] of locatedRoutes) {
+    if (entry.expiresAt <= now) locatedRoutes.delete(id);
+  }
+}
+
+function rememberLocatedRoute(result) {
+  const primaryRoute = normalizeLocatedRoute(result?.route);
+  const listedRoutes = Array.isArray(result?.routes)
+    ? result.routes.map(normalizeLocatedRoute).filter(Boolean)
+    : [];
+  if (!primaryRoute && listedRoutes.length === 0) return result;
+  pruneLocatedRoutes();
+  const remembered = new Map();
+  const storeRoute = (route) => {
+    const key = `${route.source}\n${route.url}`;
+    const existing = remembered.get(key);
+    if (existing) return existing;
+    const routeId = randomUUID();
+    const stored = { ...route, routeId };
+    remembered.set(key, stored);
+    locatedRoutes.set(routeId, { route, expiresAt: Date.now() + LOCATED_ROUTE_TTL_MS });
+    return stored;
+  };
+  const routes = listedRoutes.map(storeRoute);
+  const route = primaryRoute ? storeRoute(primaryRoute) : routes[0];
+  return { ...result, route, routes, routeId: route.routeId };
+}
+
+function getLocatedRoute(routeId) {
+  pruneLocatedRoutes();
+  if (typeof routeId !== "string") return undefined;
+  return locatedRoutes.get(routeId)?.route;
+}
+
+async function requestIsolatedEngine(method, payload, timeoutMs) {
+  if (!enginePrepared) throw new Error("内部下载引擎未就绪");
+  const worker = new EngineWorker(enginePrepared, { reportAvailability: false });
+  operationWorkers.add(worker);
+  try {
+    return await worker.request(method, payload, timeoutMs);
+  } finally {
+    operationWorkers.delete(worker);
+    worker.stop();
   }
 }
 
@@ -226,7 +303,7 @@ function engineSettings(body) {
   const settings = body && typeof body.settings === "object" && body.settings ? body.settings : {};
   return {
     email: typeof body?.email === "string" ? body.email.trim() : typeof settings.email === "string" ? settings.email.trim() : "",
-    scihubEnabled: typeof settings.scihubEnabled === "boolean" ? settings.scihubEnabled : undefined,
+    scihubEnabled: settings.scihubEnabled === true,
     useTor: settings.useTor === true,
     strategy: typeof settings.strategy === "string" ? settings.strategy : "fastest",
   };
@@ -267,7 +344,7 @@ async function handleApi(request, response) {
     jsonResponse(response, 404, { error: "Not found" });
     return;
   }
-  if (!engineWorker) {
+  if (!engineWorker || !enginePrepared) {
     jsonResponse(response, 503, { status: "unavailable", error: "内部下载引擎未就绪" });
     return;
   }
@@ -292,25 +369,34 @@ async function handleApi(request, response) {
       return;
     }
     if (requestUrl.pathname === "/api/papers/locate") {
-      const result = safeEngineResult(await engineWorker.request("locate", {
+      const locateTimeoutMs = boundedTimeout(body.timeoutMs, 20_000, 5_000, 45_000);
+      const result = rememberLocatedRoute(safeEngineResult(await requestIsolatedEngine("locate", {
         identifier: body.identifier,
         title: body.title,
         email: body.email,
-        timeoutMs: body.timeoutMs,
+        timeoutMs: locateTimeoutMs,
         settings: engineSettings(body),
-      }, 120_000));
+      }, locateTimeoutMs + 5_000)));
       jsonResponse(response, result.status === "error" ? 502 : 200, result);
       return;
     }
     if (requestUrl.pathname === "/api/papers/download") {
+      const downloadTimeoutMs = boundedTimeout(body.timeoutMs, 60_000, 15_000, 90_000);
+      const route = getLocatedRoute(body.routeId);
+      if (!route) {
+        jsonResponse(response, 409, { status: "error", error: "下载候选已过期，请重新检索来源" });
+        return;
+      }
       mkdirSync(path.join(dataDir, "papers"), { recursive: true });
-      const result = safeEngineResult(await engineWorker.request("download", {
+      const result = safeEngineResult(await requestIsolatedEngine("download", {
         identifier: body.identifier,
         title: body.title,
         email: body.email,
         settings: engineSettings(body),
+        route,
         outputDir: path.join(dataDir, "papers"),
-      }, 15 * 60_000));
+        timeoutMs: downloadTimeoutMs,
+      }, downloadTimeoutMs + 5_000));
       if (result.status !== "downloaded" || !result.filePath) {
         jsonResponse(response, 404, result);
         return;
@@ -353,6 +439,7 @@ function startApiServer() {
 
 function startEngine() {
   let prepared;
+  enginePrepared = undefined;
   engineState = { status: "starting", sourceCount: 13 };
   try {
     mkdirSync(dataDir, { recursive: true });
@@ -368,6 +455,7 @@ function startEngine() {
     return;
   }
   try {
+    enginePrepared = prepared;
     engineWorker = new EngineWorker(prepared);
     log("Internal paper engine process started.");
   } catch (error) {
@@ -385,7 +473,7 @@ function startFrontend() {
     startStaticServer();
     return;
   }
-  const viteBin = require.resolve("vite/bin/vite.js");
+  const viteBin = path.join(path.dirname(require.resolve("vite/package.json")), "bin", "vite.js");
   const args = isDev
     ? [viteBin, "--host", webHost, "--port", String(webPort), "--strictPort"]
     : [viteBin, "preview", "--host", webHost, "--port", String(webPort), "--strictPort"];
@@ -478,6 +566,9 @@ function shutdown(code = 0) {
   if (apiServer) apiServer.close();
   if (frontendServer) frontendServer.close();
   if (engineWorker) engineWorker.stop();
+  for (const worker of operationWorkers) worker.stop();
+  operationWorkers.clear();
+  locatedRoutes.clear();
   stopProcess(frontendProcess);
   process.exit(code);
 }

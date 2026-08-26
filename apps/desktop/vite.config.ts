@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const apiPort = process.env.SCHOLARSCOPE_API_PORT || '5181'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -10,7 +12,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:5181',
+        target: `http://127.0.0.1:${apiPort}`,
         changeOrigin: true,
       },
     },

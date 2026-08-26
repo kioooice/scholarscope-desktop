@@ -20,13 +20,27 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 
 
 DOI_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$", re.I)
 DEFAULT_SOURCE_COUNT = 13
+SOURCE_PRIORITY = {
+    "plosdirect": 0,
+    "unpaywall": 1,
+    "openalexoa": 2,
+    "semanticscholar": 3,
+    "doaj": 4,
+    "crossrefpage": 5,
+    "europepmc": 6,
+    "pmc": 7,
+    "core": 8,
+    "scibban": 30,
+    "libgen": 31,
+    "sci-hub": 32,
+}
 
 
 def clean_doi(value: str | None) -> str | None:
@@ -36,6 +50,62 @@ def clean_doi(value: str | None) -> str | None:
     if not match:
         return None
     return match.group(1).rstrip(".,;)").lower()
+
+
+def bounded_timeout_seconds(
+    request: dict[str, Any],
+    *,
+    default_seconds: float,
+    minimum_seconds: float,
+    maximum_seconds: float,
+) -> float:
+    try:
+        requested = float(request.get("timeoutMs") or default_seconds * 1000) / 1000
+    except (TypeError, ValueError):
+        requested = default_seconds
+    return max(minimum_seconds, min(requested, maximum_seconds))
+
+
+def apply_source_limits(config: dict[str, Any], request: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+    settings = request.get("settings") if isinstance(request.get("settings"), dict) else {}
+    if settings.get("email"):
+        config["email"] = str(settings["email"]).strip()
+    if settings.get("scihubEnabled") is not None:
+        config["scihub_enabled"] = bool(settings["scihubEnabled"])
+    config["download_strategy"] = str(settings.get("strategy") or "fastest")
+    config["request_delay_min"] = 0.0
+    config["request_delay_max"] = 0.0
+    config["fixed_request_delay_enabled"] = False
+    config["connect_timeout"] = max(3, min(10, int(timeout_seconds // 4) or 3))
+    config["read_timeout"] = max(5, min(20, int(timeout_seconds // 2) or 5))
+    # Tor setup can block for minutes while fetching its own runtime. It must
+    # be an explicit setting rather than an automatic fallback for a desktop click.
+    config["use_tor_for_scihub"] = settings.get("useTor") is True
+    return settings
+
+
+def located_route(request: dict[str, Any]) -> dict[str, Any] | None:
+    route = request.get("route")
+    if not isinstance(route, dict):
+        return None
+    url = route.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return None
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return {
+        "source": str(route.get("source") or "下载来源").strip()[:120] or "下载来源",
+        "url": url.strip(),
+        "isPdf": route.get("isPdf") is True,
+    }
+
+
+def candidate_output_path(doi: str, output_dir: Any, config: dict[str, Any]) -> Path:
+    target_dir = Path(output_dir) if isinstance(output_dir, str) and output_dir.strip() else Path(str(config.get("output_dir") or tempfile.gettempdir()))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", doi).strip("._")[:180] or "paper"
+    return target_dir / f"{filename}.pdf"
 
 
 def strip_tags(value: Any) -> str:
@@ -323,7 +393,12 @@ class ProbeRecorder:
 
     def candidates(self) -> list[dict[str, Any]]:
         with self._lock:
-            return sorted(self._candidates, key=lambda item: item["foundAt"])
+            def candidate_key(item: dict[str, Any]) -> tuple[int, int, float]:
+                source = str(item.get("source") or "").lower()
+                priority = next((value for name, value in SOURCE_PRIORITY.items() if source == name or source.startswith(f"{name}(")), 20)
+                return (0 if item.get("isPdf") else 1, priority, float(item["foundAt"]))
+
+            return sorted(self._candidates, key=candidate_key)
 
 
 class PatchSet:
@@ -406,15 +481,13 @@ def locate_sources(doi: str, request: dict[str, Any]) -> dict[str, Any]:
     from scansci_pdf.sources import _build_free_sources
 
     config = load_config().copy()
-    settings = request.get("settings") if isinstance(request.get("settings"), dict) else {}
-    if settings.get("email"):
-        config["email"] = str(settings["email"]).strip()
-    if settings.get("scihubEnabled") is not None:
-        config["scihub_enabled"] = bool(settings["scihubEnabled"])
-    config["download_strategy"] = str(settings.get("strategy") or "fastest")
-    config["request_delay_min"] = 0.0
-    config["request_delay_max"] = 0.0
-    config["fixed_request_delay_enabled"] = False
+    timeout_seconds = bounded_timeout_seconds(
+        request,
+        default_seconds=20,
+        minimum_seconds=5,
+        maximum_seconds=45,
+    )
+    apply_source_limits(config, request, timeout_seconds)
 
     source_pairs = _build_free_sources(doi, config)
     source_names = [label for _, label in source_pairs]
@@ -438,7 +511,7 @@ def locate_sources(doi: str, request: dict[str, Any]) -> dict[str, Any]:
     try:
         with ThreadPoolExecutor(max_workers=max(1, min(len(source_pairs), 16))) as pool:
             futures = [pool.submit(run_source, source_fn, label) for source_fn, label in source_pairs]
-            deadline = time.monotonic() + max(5.0, min(float(request.get("timeoutMs") or 20000) / 1000, 90.0))
+            deadline = time.monotonic() + timeout_seconds
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -506,34 +579,62 @@ def locate(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def download_paper(request: dict[str, Any]) -> dict[str, Any]:
-    from scansci_pdf.sources import download
+    from scansci_pdf import sources
+    from scansci_pdf.pdf_utils import download_pdf
 
     doi, error = resolve_identifier(request)
     if error:
         return error
     assert doi
-    settings = request.get("settings") if isinstance(request.get("settings"), dict) else {}
-    result = download(
-        doi,
-        output_dir=request.get("outputDir"),
-        scihub_enabled=settings.get("scihubEnabled"),
-        use_tor=bool(settings.get("useTor", False)),
-        strategy=str(settings.get("strategy") or "fastest"),
+    timeout_seconds = bounded_timeout_seconds(
+        request,
+        default_seconds=60,
+        minimum_seconds=15,
+        maximum_seconds=90,
+    )
+    config = sources.load_config().copy()
+    settings = apply_source_limits(config, request, timeout_seconds)
+    route = located_route(request)
+    if not route:
+        return {"status": "error", "identifier": doi, "error": "下载候选已过期，请重新检索来源"}
+    if not route["isPdf"]:
+        return {
+            "status": "error",
+            "identifier": doi,
+            "source": route["source"],
+            "error": "当前候选来源未提供可直接下载的 PDF，请查看来源页面",
+        }
+
+    output_path = candidate_output_path(doi, request.get("outputDir"), config)
+    # Download exactly the route shown in the UI. Do not start another source
+    # race here, otherwise a Sci-Hub/LibGen fallback can replace that route.
+    result = download_pdf(
+        route["url"],
+        output_path,
+        config,
+        route["source"],
+        require_pdf_like_url=False,
+        use_tor=settings.get("useTor") is True,
     )
     if not isinstance(result, dict):
-        return {"status": "error", "error": "下载引擎返回了无效结果"}
+        return {
+            "status": "error",
+            "identifier": doi,
+            "source": route["source"],
+            "error": "当前候选来源未能返回 PDF，请查看来源页面或稍后重试",
+        }
     if result.get("success"):
         return {
             "status": "downloaded",
             "identifier": doi,
-            "source": result.get("source") or "下载引擎",
+            "source": result.get("source") or route["source"],
             "filePath": str(result.get("file") or ""),
         }
     return {
         "status": "error",
         "identifier": doi,
-        "error": str(result.get("error") or result.get("message") or "未能下载该文献"),
-        "source": result.get("source"),
+        "source": route["source"],
+        "error": str(result.get("error") or result.get("message") or "当前候选来源未能返回 PDF，请查看来源页面或稍后重试"),
     }
 
 

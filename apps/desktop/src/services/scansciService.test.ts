@@ -3,7 +3,7 @@ import type { ProviderSettings } from "../types/athena";
 import type { UnifiedPaper } from "../types/search";
 
 import { defaultProviderSettings } from "./providerSettingsService";
-import { scansciService, selectScanSciPapers } from "./scansciService";
+import { downloadTimeoutMs, scansciService, selectScanSciPapers } from "./scansciService";
 
 function settings(overrides: Partial<ProviderSettings> = {}): ProviderSettings {
   return {
@@ -66,6 +66,7 @@ describe("integrated paper download engine", () => {
       .mockResolvedValueOnce(jsonResponse({
         status: "found",
         route: { source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true },
+        routeId: "route-core",
         checkedSources: 13,
         totalSources: 13,
       }));
@@ -81,6 +82,7 @@ describe("integrated paper download engine", () => {
       source: "CORE",
       url: "https://repository.example/paper.pdf",
       isPdf: true,
+      routeId: "route-core",
       checkedSources: 13,
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -94,12 +96,44 @@ describe("integrated paper download engine", () => {
     const result = await scansciService.downloadPaper(
       { title: "Open paper", doi: "10.5555/scansci-oa" },
       settings(),
-      { status: "found", source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true },
+      { status: "found", source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true, routeId: "route-core" },
     );
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/papers/download");
     expect(result).toMatchObject({ status: "found", source: "Repository mirror", url: "blob:scansci-test", isPdf: true, downloadStatus: "ready" });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toMatchObject({ identifier: "10.5555/scansci-oa" });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toMatchObject({
+      identifier: "10.5555/scansci-oa",
+      routeId: "route-core",
+      settings: { scihubEnabled: false },
+    });
+    expect(body).not.toHaveProperty("route");
+  });
+
+  it("keeps a located source retryable when a download attempt fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "内部下载引擎请求超时" }, 504));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = { status: "found" as const, source: "CORE", url: "https://repository.example/paper.pdf", isPdf: true };
+
+    const result = await scansciService.downloadPaper(
+      { title: "Slow paper", doi: "10.5555/scansci-timeout" },
+      settings(),
+      current,
+    );
+
+    expect(result).toMatchObject({
+      status: "found",
+      source: "CORE",
+      url: "https://repository.example/paper.pdf",
+      downloadStatus: "error",
+      error: "内部下载引擎请求超时",
+    });
+  });
+
+  it("bounds a user-facing download request to a finite interval", () => {
+    expect(downloadTimeoutMs(settings({ scansciTimeoutMs: 2_000 }))).toBe(15_000);
+    expect(downloadTimeoutMs(settings({ scansciTimeoutMs: 20_000 }))).toBe(60_000);
+    expect(downloadTimeoutMs(settings({ scansciTimeoutMs: 60_000 }))).toBe(90_000);
   });
 
   it("returns not-found from the locate endpoint", async () => {

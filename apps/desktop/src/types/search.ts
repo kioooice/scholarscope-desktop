@@ -7,7 +7,8 @@ export type ScanSciLookupState = {
   source?: string;
   url?: string;
   isPdf?: boolean;
-  routes?: Array<{ source?: string; url?: string; isPdf?: boolean }>;
+  routeId?: string;
+  routes?: Array<{ source?: string; url?: string; isPdf?: boolean; routeId?: string }>;
   checkedSources?: number;
   totalSources?: number;
   downloadStatus?: "idle" | "downloading" | "ready" | "error";
