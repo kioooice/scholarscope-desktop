@@ -384,6 +384,41 @@ kbd {
   line-height: 1.6;
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 18px;
+  border-bottom: 1px solid #d7dee8;
+}
+
+.settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 13px;
+  color: #6c7a8f;
+  font-size: 12px;
+  font-weight: 650;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+}
+
+.settings-tab:hover {
+  color: #315de8;
+  background: #f7f9fd;
+}
+
+.settings-tab--active {
+  color: #234ecf;
+  background: #fff;
+  border-color: #d7dee8;
+  box-shadow: 0 -1px 0 #fff;
+}
+
 .settings-reset {
   display: inline-flex;
   align-items: center;
@@ -631,6 +666,53 @@ kbd {
   color: #78869a;
   font-size: 12px;
   font-weight: 500;
+}
+
+.settings-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.settings-path-display {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  height: 44px;
+  padding: 0 12px;
+  color: #40516b;
+  background: #f8fafc;
+  border: 1px solid #d5dce7;
+  border-radius: 7px;
+}
+
+.settings-path-display svg {
+  flex: 0 0 auto;
+  color: #5271d7;
+}
+
+.settings-path-display span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-path-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-path-note {
+  margin: 10px 0 0;
+  color: #8b97a8;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .settings-section--footer {
@@ -1192,6 +1274,15 @@ kbd {
     align-self: flex-start;
   }
 
+  .settings-tabs {
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .settings-tab {
+    flex: 0 0 auto;
+  }
+
   .settings-section {
     padding: 19px 16px 20px;
   }
@@ -1210,5 +1301,13 @@ kbd {
   .settings-field-grid--engine,
   .settings-toggle-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-path-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-path-actions {
+    justify-content: flex-start;
   }
 }

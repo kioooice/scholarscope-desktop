@@ -1,4 +1,4 @@
-import type { Paper, SearchFilters, SearchSource } from "./athena";
+import type { Paper, SearchFilters, SearchSource } from "./scholarscope";
 
 export type ScanSciLookupStatus = "idle" | "checking" | "found" | "not-found" | "unavailable" | "error";
 
@@ -16,7 +16,7 @@ export type ScanSciLookupState = {
 };
 
 export type UnifiedPaper = Paper & {
-  abstractSource?: SearchSource | "OpenAIRE";
+  abstractSource?: SearchSource;
   sourceProviders: SearchSource[];
   sourceUrls: Partial<Record<SearchSource, string>>;
   mergeWarnings: string[];

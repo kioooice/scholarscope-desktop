@@ -1,0 +1,12 @@
+ScholarScope
+Copyright 2026 ScholarScope contributors.
+
+This repository is a modified and substantially reduced desktop application
+derived from Athena Scholar, originally released by hazza-uxdev under the
+Apache License, Version 2.0:
+https://github.com/Hazza-uxdev/Athena-Scholar
+
+The current work tree removes the unused Athena Scholar UI, agent, AI,
+library, graph, and notes layers. The retained upstream attribution and the
+Apache License 2.0 terms continue to apply to any portions derived from that
+work. See LICENSE for the license text.

@@ -1,6 +1,6 @@
-import type { Paper, SearchFilters, SearchSource } from "../types/athena";
+import type { Paper, SearchFilters, SearchSource } from "../types/scholarscope";
 import type { ProviderDiagnostic, SearchHistoryEntry, SearchSession, UnifiedPaper } from "../types/search";
-import { isPlaceholderAbstract } from "./abstractLookupService";
+import { isPlaceholderAbstract } from "./paperMetadata";
 import { fetchInternalApi } from "./internalApi";
 import { loadProviderSettings } from "./providerSettingsService";
 
@@ -45,8 +45,6 @@ function preferredAbstract(left: string, right: string): string {
 function sourceUrl(paper: Paper): string | undefined {
   if (paper.sourceProvider === "OpenAlex" && paper.openalexId) return paper.openalexId;
   if (paper.sourceProvider === "Crossref" && paper.doi) return `https://doi.org/${cleanDoi(paper.doi)}`;
-  if (paper.sourceProvider === "OpenAIRE" && paper.doi) return `https://doi.org/${cleanDoi(paper.doi)}`;
-  if (paper.sourceProvider === "Unpaywall") return paper.oaUrl || paper.pdfUrl;
   if (paper.publisherUrl) return paper.publisherUrl;
   if (paper.doi) return `https://doi.org/${cleanDoi(paper.doi)}`;
   return paper.openalexId;

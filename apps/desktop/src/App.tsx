@@ -18,14 +18,15 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { isPlaceholderAbstract } from "./services/abstractLookupService";
+import { isPlaceholderAbstract } from "./services/paperMetadata";
 import { triggerDownload } from "./services/downloadAction";
+import { chooseDownloadDirectory, getDefaultDownloadDirectory } from "./services/downloadDirectoryService";
 import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, primaryProviderCount, searchLiterature } from "./services/unifiedSearchService";
 import { defaultProviderSettings, loadProviderSettings, saveProviderSettings } from "./services/providerSettingsService";
 import { scansciService, selectScanSciPapers, type ScanSciConnectionStatus } from "./services/scansciService";
 import { SearchSettingsPage, type SearchEngineStatus } from "./pages/SearchSettingsPage";
-import type { ProviderSettings, SearchFilters, SearchSource } from "./types/athena";
+import type { ProviderSettings, SearchFilters, SearchSource } from "./types/scholarscope";
 import type { ScanSciLookupState, SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
 
 const defaultFilters: SearchFilters = {
@@ -34,14 +35,8 @@ const defaultFilters: SearchFilters = {
 };
 
 const sourceNames: Record<SearchSource, string> = {
-  OpenAlex: "OpenAlex",
-  OpenAIRE: "OpenAIRE",
   Crossref: "Crossref",
-  "Semantic Scholar": "Semantic Scholar",
-  Unpaywall: "Unpaywall",
-  arXiv: "arXiv",
-  PubMed: "PubMed",
-  "Google Scholar": "Google Scholar",
+  OpenAlex: "OpenAlex",
   ScholarScope: "下载引擎",
 };
 
@@ -119,9 +114,9 @@ function ExternalAction({ url, className, children }: { url: string; className?:
   );
 }
 
-function DownloadAction({ url, filename, className, onClick, disabled, children }: { url?: string; filename: string; className?: string; onClick?: () => void; disabled?: boolean; children: ReactNode }) {
+function DownloadAction({ url, filename, className, onClick, disabled, downloadDirectory, children }: { url?: string; filename: string; className?: string; onClick?: () => void; disabled?: boolean; downloadDirectory?: string; children: ReactNode }) {
   function handleClick() {
-    triggerDownload(url, filename, onClick);
+    void triggerDownload(url, filename, onClick, downloadDirectory);
   }
 
   return <button className={className} type="button" onClick={handleClick} disabled={disabled || (!url && !onClick)}>{children}</button>;
@@ -168,7 +163,7 @@ function PaperRow({ paper, active, onSelect, scanSciState }: { paper: UnifiedPap
   );
 }
 
-function PaperPreview({ paper, scanSciState, onDownload }: { paper?: UnifiedPaper; scanSciState?: ScanSciLookupState; onDownload: (route?: DownloadRoute) => void }) {
+function PaperPreview({ paper, scanSciState, downloadDirectory, onDownload }: { paper?: UnifiedPaper; scanSciState?: ScanSciLookupState; downloadDirectory?: string; onDownload: (route?: DownloadRoute) => void }) {
   if (!paper) {
     return (
       <aside className="preview-panel preview-panel--empty">
@@ -244,6 +239,7 @@ function PaperPreview({ paper, scanSciState, onDownload }: { paper?: UnifiedPape
                   <DownloadAction
                     url={downloadedUrl}
                     filename={paper.title}
+                    downloadDirectory={downloadDirectory}
                     onClick={onDownload}
                     disabled={isDownloading}
                   >
@@ -260,6 +256,7 @@ function PaperPreview({ paper, scanSciState, onDownload }: { paper?: UnifiedPape
                 {alternativeRoutes.map((route) => (
                   <DownloadAction
                     filename={paper.title}
+                    downloadDirectory={downloadDirectory}
                     onClick={() => onDownload(route)}
                     disabled={isDownloading}
                     key={route.routeId}
@@ -282,7 +279,7 @@ function PaperPreview({ paper, scanSciState, onDownload }: { paper?: UnifiedPape
 
       <div className="preview-actions">
         {publisherUrl && <ExternalAction className="button button--primary" url={publisherUrl}>查看出版页面 <ExternalLink size={15} /></ExternalAction>}
-        {scanSciState?.status === "found" && scanSciUrl && canDownloadCandidate && <DownloadAction className="button" url={downloadedUrl} filename={paper.title} onClick={onDownload} disabled={isDownloading}>{downloadLabel(scanSciState)} <Download size={15} /></DownloadAction>}
+        {scanSciState?.status === "found" && scanSciUrl && canDownloadCandidate && <DownloadAction className="button" url={downloadedUrl} filename={paper.title} downloadDirectory={downloadDirectory} onClick={onDownload} disabled={isDownloading}>{downloadLabel(scanSciState)} <Download size={15} /></DownloadAction>}
         {scanSciState?.status === "found" && scanSciUrl && !canDownloadCandidate && <ExternalAction className="button" url={scanSciUrl}>查看来源 <ExternalLink size={15} /></ExternalAction>}
         {waitingForAccess && <span className="button button--pending">正在寻找可获取版本 <LoaderCircle className="spin" size={15} /></span>}
         {doiUrl(paper.doi) && <ExternalAction className="button" url={doiUrl(paper.doi)!}>打开 DOI <ExternalLink size={15} /></ExternalAction>}
@@ -301,6 +298,8 @@ export default function App() {
   const [error, setError] = useState<string>();
   const [showSettings, setShowSettings] = useState(false);
   const [providerSettings, setProviderSettings] = useState(() => loadProviderSettings());
+  const [defaultDownloadDirectory, setDefaultDownloadDirectory] = useState("");
+  const [downloadDirectoryBusy, setDownloadDirectoryBusy] = useState(false);
   const [scanSciResults, setScanSciResults] = useState<Record<string, ScanSciLookupState>>({});
   const [scanSciStatus, setScanSciStatus] = useState<ScanSciConnectionStatus>("disabled");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -338,6 +337,18 @@ export default function App() {
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [papers.length]);
+
+  useEffect(() => {
+    let active = true;
+    void getDefaultDownloadDirectory()
+      .then((directory) => {
+        if (active && directory) setDefaultDownloadDirectory(directory);
+      })
+      .catch((directoryError) => {
+        console.error("Failed to resolve the default download directory", directoryError);
+      });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -417,6 +428,20 @@ export default function App() {
     setScanSciStatus(nextSettings.scansciEnabled && nextSettings.scansciAutoSearch ? "checking" : "disabled");
   }
 
+  async function selectDownloadDirectory() {
+    if (downloadDirectoryBusy) return;
+    setDownloadDirectoryBusy(true);
+    try {
+      const directory = await chooseDownloadDirectory();
+      if (directory) updateProviderSettings({ downloadDirectory: directory });
+    } catch (directoryError) {
+      console.error("Failed to choose a download directory", directoryError);
+      globalThis.alert?.("无法选择保存文件夹，请检查桌面应用权限后重试。");
+    } finally {
+      setDownloadDirectoryBusy(false);
+    }
+  }
+
   async function checkScanSciStatus() {
     if (!providerSettings.scansciEnabled || !providerSettings.scansciAutoSearch) return;
     setScanSciStatus("checking");
@@ -468,6 +493,9 @@ export default function App() {
           onUpdate={updateProviderSettings}
           onReset={resetProviderSettings}
           onCheckEngine={() => { void checkScanSciStatus(); }}
+          defaultDownloadDirectory={defaultDownloadDirectory}
+          downloadDirectoryBusy={downloadDirectoryBusy}
+          onChooseDownloadDirectory={() => { void selectDownloadDirectory(); }}
         />
       ) : <>
       <section className="search-zone">
@@ -537,6 +565,7 @@ export default function App() {
         <PaperPreview
           paper={selectedPaper}
           scanSciState={selectedPaper ? scanSciResults[selectedPaper.id] : undefined}
+          downloadDirectory={providerSettings.downloadDirectory}
           onDownload={(route) => { if (selectedPaper) void downloadPaper(selectedPaper, route); }}
         />
       </main>

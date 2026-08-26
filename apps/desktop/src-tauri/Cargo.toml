@@ -1,21 +1,18 @@
 [package]
-name = "athena-scholar"
+name = "scholarscope-desktop"
 version = "0.1.0"
 description = "Windows-first scientific literature assistant."
-authors = ["Athena Scholar"]
+authors = ["ScholarScope contributors"]
 edition = "2021"
 
 [lib]
-name = "athena_scholar_lib"
+name = "scholarscope_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

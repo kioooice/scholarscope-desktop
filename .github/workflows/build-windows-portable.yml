@@ -93,7 +93,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
 
           $desktopExe = @(
-            (Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\target\release\athena-scholar.exe"),
+            (Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\target\release\scholarscope-desktop.exe"),
             (Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\target\release\ScholarScope.exe")
           ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $desktopExe) { throw "Tauri desktop executable was not found." }

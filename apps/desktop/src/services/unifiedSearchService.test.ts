@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Paper, SearchSource } from "../types/athena";
+import type { Paper, SearchSource } from "../types/scholarscope";
 import { mergeAndRank, normalizeTitle } from "./unifiedSearchService";
 
 function paper(sourceProvider: SearchSource, overrides: Partial<Paper> = {}): Paper {
@@ -51,7 +51,7 @@ describe("unified literature merge", () => {
   it("merges exact normalized titles when DOI is missing", () => {
     const results = mergeAndRank([
       paper("Crossref"),
-      paper("Semantic Scholar", { title: "Secondary current distribution—in a Hull cell" }),
+      paper("OpenAlex", { title: "Secondary current distribution—in a Hull cell" }),
     ], "Hull cell", filters);
 
     expect(results).toHaveLength(1);
@@ -62,7 +62,7 @@ describe("unified literature merge", () => {
     const results = mergeAndRank([
       paper("Crossref", { doi: "10.1000/abc" }),
       paper("OpenAlex", { doi: "10.1000/abc", isOpenAccess: true }),
-      paper("Semantic Scholar", { doi: "10.1000/closed", title: "Closed paper" }),
+      paper("OpenAlex", { doi: "10.1000/closed", title: "Closed paper" }),
     ], "current distribution", { ...filters, openAccessOnly: true });
 
     expect(results).toHaveLength(1);

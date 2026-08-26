@@ -15,22 +15,17 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.101.0",
     "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.5.0",
     "@tauri-apps/plugin-opener": "^2.5.4",
-    "clsx": "^2.1.1",
-    "cytoscape": "^3.34.0",
-    "date-fns": "^4.4.0",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6",
-    "zustand": "^5.0.14"
+    "react-dom": "^19.2.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tailwindcss/postcss": "^4.3.0",
     "@tauri-apps/cli": "^2.11.2",
-    "@types/cytoscape": "^3.21.9",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

@@ -72,7 +72,7 @@ impl Drop for InternalEngine {
     }
 }
 
-fn packaged_portable_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
+pub fn packaged_portable_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
     let portable_dir = regular_windows_path(
         app.path()
             .resource_dir()

@@ -95,7 +95,22 @@ describe("triggerDownload", () => {
 
     await triggerDownload("blob:ready-pdf", "A paper", vi.fn());
 
-    expect(alertMock).toHaveBeenCalledWith("PDF 保存失败，请稍后重试。保存位置为 Downloads 文件夹。");
+    expect(alertMock).toHaveBeenCalledWith("PDF 保存失败，请检查下载设置中的保存文件夹后重试。");
     expect(anchor.click).not.toHaveBeenCalled();
+  });
+
+  it("passes a configured directory to the native Tauri command", async () => {
+    mocks.isTauri.mockReturnValue(true);
+    mocks.invoke.mockResolvedValue("D:\\Papers\\A paper.pdf");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Uint8Array([37, 80, 68, 70]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await triggerDownload("blob:ready-pdf", "A paper", vi.fn(), "D:\\Papers");
+
+    expect(mocks.invoke).toHaveBeenCalledWith("save_pdf_file", {
+      filename: "A paper.pdf",
+      data: [37, 80, 68, 70],
+      directory: "D:\\Papers",
+    });
   });
 });

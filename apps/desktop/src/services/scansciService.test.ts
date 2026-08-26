@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderSettings } from "../types/athena";
+import type { ProviderSettings } from "../types/scholarscope";
 import type { UnifiedPaper } from "../types/search";
 
 import { defaultProviderSettings } from "./providerSettingsService";

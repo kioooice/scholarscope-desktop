@@ -1,5 +1,6 @@
 mod engine;
 
 pub use engine::{
-    regular_windows_path, start_internal_engine, stop_internal_engine, InternalEngine,
+    packaged_portable_dir, regular_windows_path, start_internal_engine, stop_internal_engine,
+    InternalEngine,
 };

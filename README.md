@@ -28,13 +28,10 @@ ScholarScope 是一个 Windows 便携式桌面论文查找工具，采用类似 
 ```text
 apps/
   desktop/
-    src/                                 React 界面、状态和前端服务
+    src/                                 React 界面、搜索状态和前端服务
     src-tauri/
-      migrations/                        SQLite 数据库初始化与后续升级
       src/
-        commands/                        Tauri 命令边界
-        services/                        学术接口与业务逻辑
-        database/                        SQLite 连接与迁移
+        commands/                        PDF 原生保存命令
         filesystem/                      内置运行时和进程生命周期
     server.mjs                           内部 API 与 Python worker 管理
     package.json                         桌面应用依赖与开发命令
@@ -96,6 +93,8 @@ npm run lint
 - 当前无模糊标题聚类，只合并 DOI 相同或标准化标题完全相同的记录。
 - 缓存目前只覆盖当前运行会话，检索历史保存在本机 WebView 存储中。
 
-## 上游与许可证
+## 许可证与来源
 
-本项目基于 [Athena Scholar](https://github.com/Hazza-uxdev/Athena-Scholar) 改造，保留上游 Apache License 2.0。修改版本继续遵守仓库内 [LICENSE](./LICENSE) 的归属与再分发要求。
+当前工作树已经收缩为 ScholarScope 的元数据检索、13 来源 PDF 定位、下载和 Windows 便携运行链路；未挂载的 Athena Scholar UI、Agent、AI、图谱、论文库和笔记层已移除。项目仍保留来自 [Athena Scholar](https://github.com/Hazza-uxdev/Athena-Scholar) 的历史派生关系，因此继续遵守 Apache License 2.0 的许可证、归属和修改声明要求。
+
+再分发时请同时保留 [LICENSE](./LICENSE) 和 [NOTICE](./NOTICE)。本项目自己的修改归属于 ScholarScope contributors；依赖包和内置 ScanSci 引擎仍分别受其各自许可证约束。

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Athena Scholar default desktop window capability.",
+  "description": "ScholarScope default desktop window capability.",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default"]
+  "permissions": ["core:default", "dialog:default", "opener:default"]
 }

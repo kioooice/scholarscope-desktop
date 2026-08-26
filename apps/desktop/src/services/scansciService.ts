@@ -1,4 +1,4 @@
-import type { Paper, ProviderSettings } from "../types/athena";
+import type { Paper, ProviderSettings } from "../types/scholarscope";
 import type { ScanSciLookupState, UnifiedPaper } from "../types/search";
 import { fetchInternalApi } from "./internalApi";
 

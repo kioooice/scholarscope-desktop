@@ -1,13 +1,22 @@
+use crate::filesystem::{packaged_portable_dir, regular_windows_path};
 use crate::models::CommandResult;
-use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager};
 
-fn downloads_directory() -> CommandResult<PathBuf> {
-    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
-    home.map(|value| PathBuf::from(value).join("Downloads"))
-        .ok_or_else(|| "无法确定用户目录，不能保存 PDF。".to_string())
+fn default_download_directory(app: &AppHandle) -> CommandResult<PathBuf> {
+    if let Some(directory) = packaged_portable_dir(app)? {
+        return Ok(directory);
+    }
+
+    // During `tauri dev`, resources live outside the portable layout. Keeping
+    // the resolver usable there makes the settings page testable while the
+    // packaged build still resolves to the extracted package root.
+    app.path()
+        .resource_dir()
+        .map(regular_windows_path)
+        .map_err(|error| format!("无法确定便携包目录：{error}"))
 }
 
 fn sanitize_filename(filename: &str) -> String {
@@ -97,14 +106,28 @@ fn create_unique_file(directory: &Path, filename: &str) -> CommandResult<(PathBu
             Err(error) => return Err(format!("无法创建 PDF 文件：{error}")),
         }
     }
-    Err("Downloads 文件夹中同名文件过多，无法选择保存文件名。".to_string())
+    Err("目标文件夹中同名文件过多，无法选择保存文件名。".to_string())
 }
 
 #[tauri::command]
-pub fn save_pdf_file(filename: String, data: Vec<u8>) -> CommandResult<String> {
-    let directory = downloads_directory()?;
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("无法创建 Downloads 文件夹：{error}"))?;
+pub fn get_default_download_directory(app: AppHandle) -> CommandResult<String> {
+    Ok(default_download_directory(&app)?
+        .to_string_lossy()
+        .into_owned())
+}
+
+#[tauri::command]
+pub fn save_pdf_file(
+    app: AppHandle,
+    filename: String,
+    data: Vec<u8>,
+    directory: Option<String>,
+) -> CommandResult<String> {
+    let directory = match directory.filter(|value| !value.trim().is_empty()) {
+        Some(value) => regular_windows_path(PathBuf::from(value.trim())),
+        None => default_download_directory(&app)?,
+    };
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建 PDF 保存文件夹：{error}"))?;
     let safe_filename = sanitize_filename(&filename);
     let (path, mut file) = create_unique_file(&directory, &safe_filename)?;
     if let Err(error) = file.write_all(&data).and_then(|_| file.flush()) {
