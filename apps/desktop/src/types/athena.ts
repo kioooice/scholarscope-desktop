@@ -221,6 +221,8 @@ export type ProviderSettings = {
   scansciScope: "selected" | "top" | "all";
   scansciTopN: number;
   scansciTimeoutMs: number;
+  scansciScihubEnabled: boolean;
+  scansciUseTor: boolean;
   aiProvider: AiProviderMode;
   aiBaseUrl: string;
   aiModel: string;

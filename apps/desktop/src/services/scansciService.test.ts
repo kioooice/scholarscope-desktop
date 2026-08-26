@@ -118,9 +118,30 @@ describe("integrated paper download engine", () => {
       identifier: "10.5555/scansci-oa",
       routeId: "route-core",
       routeIds: ["route-core", "route-oa", "route-libgen"],
-      settings: { scihubEnabled: true },
+      settings: { scihubEnabled: true, useTor: false },
     });
     expect(body).not.toHaveProperty("route");
+  });
+
+  it("forwards source and Tor settings to the internal engine", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(pdfResponse("Fallback source"));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:scansci-settings");
+
+    await scansciService.downloadPaper(
+      { title: "Configured paper", doi: "10.5555/scansci-settings" },
+      settings({ scansciScihubEnabled: false, scansciUseTor: true }),
+      {
+        status: "found",
+        source: "CORE",
+        url: "https://repository.example/paper.pdf",
+        isPdf: true,
+        routeId: "route-core",
+      },
+    );
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.settings).toMatchObject({ scihubEnabled: false, useTor: true });
   });
 
   it("keeps a located source retryable when a download attempt fails", async () => {

@@ -66,9 +66,10 @@ function requestBody(
     settings: {
       email: settings.crossrefEmail.trim(),
       strategy: "fastest",
-      // Include the grey-source candidates in the same queue. The engine will
-      // still verify and fall through them only when earlier sources fail.
-      scihubEnabled: true,
+      // Include the grey-source candidates in the same queue when enabled. The
+      // engine still verifies and falls through them only when earlier sources fail.
+      scihubEnabled: settings.scansciScihubEnabled,
+      useTor: settings.scansciUseTor,
     },
   };
 }

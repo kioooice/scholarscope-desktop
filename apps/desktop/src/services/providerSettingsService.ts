@@ -12,6 +12,8 @@ export const defaultProviderSettings: ProviderSettings = {
   scansciScope: "selected",
   scansciTopN: 1,
   scansciTimeoutMs: 20_000,
+  scansciScihubEnabled: true,
+  scansciUseTor: false,
   aiProvider: "off",
   aiBaseUrl: "https://api.openai.com/v1",
   aiModel: "gpt-5.5",

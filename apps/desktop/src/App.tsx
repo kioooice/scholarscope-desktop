@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   ArrowUpRight,
   BookOpenText,
   CheckCircle2,
@@ -21,9 +22,10 @@ import { isPlaceholderAbstract } from "./services/abstractLookupService";
 import { triggerDownload } from "./services/downloadAction";
 import { openExternalUrl } from "./services/externalUrlService";
 import { loadSearchHistory, primaryProviderCount, searchLiterature } from "./services/unifiedSearchService";
-import { loadProviderSettings, saveProviderSettings } from "./services/providerSettingsService";
+import { defaultProviderSettings, loadProviderSettings, saveProviderSettings } from "./services/providerSettingsService";
 import { scansciService, selectScanSciPapers, type ScanSciConnectionStatus } from "./services/scansciService";
-import type { SearchFilters, SearchSource } from "./types/athena";
+import { SearchSettingsPage, type SearchEngineStatus } from "./pages/SearchSettingsPage";
+import type { ProviderSettings, SearchFilters, SearchSource } from "./types/athena";
 import type { ScanSciLookupState, SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
 
 const defaultFilters: SearchFilters = {
@@ -297,7 +299,7 @@ export default function App() {
   const [history, setHistory] = useState<SearchHistoryEntry[]>(() => loadSearchHistory());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
-  const [showProviderSettings, setShowProviderSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [providerSettings, setProviderSettings] = useState(() => loadProviderSettings());
   const [scanSciResults, setScanSciResults] = useState<Record<string, ScanSciLookupState>>({});
   const [scanSciStatus, setScanSciStatus] = useState<ScanSciConnectionStatus>("disabled");
@@ -308,6 +310,9 @@ export default function App() {
   const effectiveScanSciStatus: ScanSciConnectionStatus = !session || !providerSettings.scansciEnabled || !providerSettings.scansciAutoSearch
     ? "disabled"
     : scanSciStatus === "disabled" ? "checking" : scanSciStatus;
+  const settingsEngineStatus: SearchEngineStatus = !providerSettings.scansciEnabled || !providerSettings.scansciAutoSearch
+    ? "disabled"
+    : !session ? "idle" : scanSciStatus;
 
   const successfulProviders = useMemo(
     () => session?.diagnostics.filter((item) => item.status === "success").length ?? 0,
@@ -387,16 +392,36 @@ export default function App() {
     }
   }
 
-  function updateContactEmail(value: string) {
-    const nextSettings = saveProviderSettings({ ...providerSettings, crossrefEmail: value });
+  function updateProviderSettings(changes: Partial<ProviderSettings>) {
+    const nextSettings = saveProviderSettings({ ...providerSettings, ...changes });
     setProviderSettings(nextSettings);
+    const scanSciKeys: Array<keyof ProviderSettings> = [
+      "scansciEnabled",
+      "scansciAutoSearch",
+      "scansciScope",
+      "scansciTopN",
+      "scansciTimeoutMs",
+      "scansciScihubEnabled",
+      "scansciUseTor",
+    ];
+    if (Object.keys(changes).some((key) => scanSciKeys.includes(key as keyof ProviderSettings))) {
+      setScanSciResults({});
+      setScanSciStatus(nextSettings.scansciEnabled && nextSettings.scansciAutoSearch ? "checking" : "disabled");
+    }
   }
 
-  function updateScanSciSettings(changes: Partial<typeof providerSettings>) {
-    const nextSettings = saveProviderSettings({ ...providerSettings, ...changes });
+  function resetProviderSettings() {
+    const nextSettings = saveProviderSettings({ ...defaultProviderSettings });
     setProviderSettings(nextSettings);
     setScanSciResults({});
     setScanSciStatus(nextSettings.scansciEnabled && nextSettings.scansciAutoSearch ? "checking" : "disabled");
+  }
+
+  async function checkScanSciStatus() {
+    if (!providerSettings.scansciEnabled || !providerSettings.scansciAutoSearch) return;
+    setScanSciStatus("checking");
+    const status = await scansciService.checkStatus(providerSettings);
+    setScanSciStatus(status);
   }
 
   async function downloadPaper(paper: UnifiedPaper, route?: DownloadRoute) {
@@ -411,64 +436,40 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${showSettings ? " app-shell--settings" : ""}`}>
       <header className="app-header">
         <div className="brand">
           <div className="brand-mark"><Search size={20} /></div>
           <div><strong>ScholarScope</strong><span>全球文献发现 · 技术验证版</span></div>
         </div>
         <div className="header-actions">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="数据源设置"
-            title="数据源设置"
-            onClick={() => setShowProviderSettings((visible) => !visible)}
-          >
-            <Settings2 size={17} />
-          </button>
-          {showProviderSettings && (
-            <div className="provider-settings-popover">
-              <strong>当前检索引擎</strong>
-              <p>内部下载引擎统一处理元数据和来源定位，多个接口并行兜底，不单独显示某一个接口。</p>
-              <label>
-                <span>联系邮箱（元数据请求）</span>
-                <input
-                  type="email"
-                  value={providerSettings.crossrefEmail}
-                  onChange={(event) => updateContactEmail(event.target.value)}
-                  placeholder="可填写真实邮箱以改善元数据请求"
-                />
-              </label>
-              <p>邮箱只保存在本机设置中，用于学术接口请求。</p>
-              <label className="popover-toggle">
-                <span>自动检查下载来源</span>
-                <input
-                  type="checkbox"
-                  checked={providerSettings.scansciEnabled && providerSettings.scansciAutoSearch}
-                  onChange={(event) => updateScanSciSettings({ scansciEnabled: event.target.checked, scansciAutoSearch: event.target.checked })}
-                />
-              </label>
-              <label>
-                <span>后台范围</span>
-                <select value={providerSettings.scansciScope} onChange={(event) => updateScanSciSettings({ scansciScope: event.target.value as typeof providerSettings.scansciScope })}>
-                  <option value="selected">仅当前选中</option>
-                  <option value="top">前 N 条结果</option>
-                  <option value="all">全部无开放链接结果</option>
-                </select>
-              </label>
-              {providerSettings.scansciScope === "top" && (
-                <label>
-                  <span>前 N 条</span>
-                  <input type="number" min="1" max="50" value={providerSettings.scansciTopN} onChange={(event) => updateScanSciSettings({ scansciTopN: Math.max(1, Math.min(50, Number(event.target.value) || 1)) })} />
-                </label>
-              )}
-              <p>输入题名后先返回元数据，再由内部引擎并行查找来源；找到后提供下载按钮，不会自动下载。</p>
-            </div>
+          {showSettings ? (
+            <button type="button" className="header-back" onClick={() => setShowSettings(false)}>
+              <ArrowLeft size={16} />返回搜索
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="打开设置"
+              title="打开设置"
+              onClick={() => setShowSettings(true)}
+            >
+              <Settings2 size={17} />
+            </button>
           )}
         </div>
       </header>
 
+      {showSettings ? (
+        <SearchSettingsPage
+          settings={providerSettings}
+          engineStatus={settingsEngineStatus}
+          onUpdate={updateProviderSettings}
+          onReset={resetProviderSettings}
+          onCheckEngine={() => { void checkScanSciStatus(); }}
+        />
+      ) : <>
       <section className="search-zone">
         <form className="command-bar" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}>
           {loading ? <LoaderCircle className="spin" size={22} /> : <Search size={22} />}
@@ -539,6 +540,7 @@ export default function App() {
           onDownload={(route) => { if (selectedPaper) void downloadPaper(selectedPaper, route); }}
         />
       </main>
+      </>}
     </div>
   );
 }
