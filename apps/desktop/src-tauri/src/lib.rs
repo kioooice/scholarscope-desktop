@@ -4,6 +4,7 @@ mod filesystem;
 mod models;
 mod services;
 
+use commands::download::save_pdf_file;
 use commands::scholarly::{agent_call_ai_chat, agent_fetch_scholarly_text, agent_search_openalex};
 use commands::storage::{
     clear_saved_research_data, delete_paper, initialize_database, load_graph, load_notes,
@@ -20,6 +21,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            save_pdf_file,
             initialize_database,
             clear_saved_research_data,
             agent_search_openalex,
