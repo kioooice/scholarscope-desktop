@@ -14,9 +14,11 @@ OpenResty 必须反向代理到 Node，Python 引擎才能正常工作。
 压缩包没有外层目录。解压完成后，`app/`、`runtime/`、`data/`、`404.html` 和
 `start.sh` 应该直接位于 `index` 目录中。
 
-更新已部署的网站时，请使用干净的发布目录，或先移除上一版的应用文件后再解压。
-只保留需要继承的 `data/` 和 `config.env`；不要把旧网站的静态文件（特别是
-`404.html`）留在目录中，否则 OpenResty 的错误页可能显示上一套应用。
+更新已部署的网站时，请先在临时目录解压和验证 ZIP，再停止
+`scholarscope-web.service`，备份并替换 `app/`、`runtime/node/` 和发布脚本。
+必须保留 `data/`、`runtime/python/` 和 `config.env`；不要直接在运行目录解压或
+用 `git pull` 覆盖服务器。完整的三端同步、验证和回滚策略见源码仓库的
+[`docs/three-environment-workflow.md`](https://github.com/kioooice/scholarscope-desktop/blob/main/docs/three-environment-workflow.md)。
 
 ## 2. 首次启动
 
