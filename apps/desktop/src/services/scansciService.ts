@@ -1,5 +1,5 @@
 import type { Paper, ProviderSettings } from "../types/scholarscope";
-import type { ScanSciLookupState, UnifiedPaper } from "../types/search";
+import type { ScanSciLookupState, ScanSciRoute, UnifiedPaper } from "../types/search";
 import { fetchInternalApi } from "./internalApi";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
@@ -78,6 +78,10 @@ function paperCacheKey(paper: Pick<Paper, "title" | "doi">): string {
   return paper.doi?.trim().toLowerCase() || paper.title.trim().toLowerCase();
 }
 
+function lookupCacheKey(paper: Pick<Paper, "title" | "doi">, settings: ProviderSettings): string {
+  return `${paperCacheKey(paper)}|scihub:${settings.scansciScihubEnabled ? "on" : "off"}|tor:${settings.scansciUseTor ? "on" : "off"}`;
+}
+
 export function downloadTimeoutMs(settings: ProviderSettings): number {
   const requested = Math.round(settings.scansciTimeoutMs * 3);
   return Math.max(MIN_DOWNLOAD_TIMEOUT_MS, Math.min(MAX_DOWNLOAD_TIMEOUT_MS, requested));
@@ -92,19 +96,25 @@ function retryableDownloadFailure(current: ScanSciLookupState | undefined, error
   };
 }
 
-function mapLocateResult(payload: unknown): ScanSciLookupState {
-  const root = asObject(payload) ?? {};
-  const route = asObject(root.route);
-  const routes = Array.isArray(root.routes)
-    ? root.routes.filter((item): item is JsonObject => Boolean(asObject(item))).map((item) => ({
+function mapRoutes(value: unknown): ScanSciRoute[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const routes = value.filter((item): item is JsonObject => Boolean(asObject(item))).map((item) => ({
       source: textValue(item.source),
       url: textValue(item.url),
       isPdf: item.isPdf === true,
       routeId: textValue(item.routeId),
       probeStatus: textValue(item.probeStatus),
       probeError: textValue(item.probeError),
-    })).filter((item) => Boolean(item.url))
-    : undefined;
+    })).filter((item) => Boolean(item.url));
+  return routes.length ? routes : undefined;
+}
+
+function mapLocateResult(payload: unknown): ScanSciLookupState {
+  const root = asObject(payload) ?? {};
+  const route = asObject(root.route);
+  const routes = mapRoutes(root.routes);
+  const manualRoutes = mapRoutes(root.manualRoutes);
+  const publicationRoutes = mapRoutes(root.publicationRoutes);
   return {
     status: root.status === "found" ? "found" : root.status === "unavailable" ? "unavailable" : root.status === "error" ? "error" : "not-found",
     source: textValue(route?.source) || routes?.[0]?.source,
@@ -114,6 +124,8 @@ function mapLocateResult(payload: unknown): ScanSciLookupState {
     probeStatus: textValue(route?.probeStatus) || routes?.[0]?.probeStatus,
     probeError: textValue(route?.probeError) || routes?.[0]?.probeError,
     routes,
+    manualRoutes,
+    publicationRoutes,
     checkedSources: Number(root.checkedSources) || undefined,
     totalSources: Number(root.totalSources) || undefined,
     error: textValue(root.error),
@@ -153,7 +165,7 @@ export const scansciService = {
   },
 
   async searchPaper(paper: Pick<Paper, "title" | "doi">, settings: ProviderSettings): Promise<ScanSciLookupState> {
-    const cacheKey = paperCacheKey(paper);
+    const cacheKey = lookupCacheKey(paper, settings);
     const cached = lookupCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.result;
     const inFlight = lookupInFlight.get(cacheKey);

@@ -2,6 +2,15 @@ import type { Paper, SearchFilters, SearchSource } from "./scholarscope";
 
 export type ScanSciLookupStatus = "idle" | "checking" | "found" | "not-found" | "unavailable" | "error";
 
+export type ScanSciRoute = {
+  source?: string;
+  url?: string;
+  isPdf?: boolean;
+  routeId?: string;
+  probeStatus?: "verified" | "unverified" | "blocked" | "rejected" | string;
+  probeError?: string;
+};
+
 export type ScanSciLookupState = {
   status: ScanSciLookupStatus;
   source?: string;
@@ -10,7 +19,9 @@ export type ScanSciLookupState = {
   routeId?: string;
   probeStatus?: "verified" | "unverified" | "blocked" | "rejected" | string;
   probeError?: string;
-  routes?: Array<{ source?: string; url?: string; isPdf?: boolean; routeId?: string; probeStatus?: "verified" | "unverified" | "blocked" | "rejected" | string; probeError?: string }>;
+  routes?: ScanSciRoute[];
+  manualRoutes?: ScanSciRoute[];
+  publicationRoutes?: ScanSciRoute[];
   checkedSources?: number;
   totalSources?: number;
   downloadStatus?: "idle" | "downloading" | "ready" | "error";

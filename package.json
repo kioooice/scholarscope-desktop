@@ -10,6 +10,7 @@
     "build": "npm --workspace scholarscope-desktop run build",
     "lint": "npm --workspace scholarscope-desktop run lint",
     "test": "npm --workspace scholarscope-desktop run test",
+    "package:web:linux": "pwsh -File scripts/package-web-linux.ps1",
     "preview": "npm --workspace scholarscope-desktop run preview",
     "tauri": "npm --workspace scholarscope-desktop run tauri --",
     "tauri:dev": "npm --workspace scholarscope-desktop run tauri:dev --",

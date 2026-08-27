@@ -56,6 +56,32 @@ SOURCE_PRIORITY = {
     "sci-hub": 32,
 }
 
+# CORE currently resolves this application's records to expired blob objects.
+# Keep the source implementation available upstream, but do not spend the
+# locate budget on it or expose its broken links until it is re-enabled.
+SUPPRESSED_SOURCE_KEYS = {"core"}
+PUBLICATION_SOURCE_KEYS = {"crossref", "crossrefpage", "elsevierapi", "elsevierbrowser"}
+MANUAL_SOURCE_KEYS = {"scibban", "libgen", "sci-hub"}
+
+
+def source_key(source: Any) -> str:
+    return str(source or "").strip().lower()
+
+
+def matches_source(source: Any, names: set[str]) -> bool:
+    key = source_key(source)
+    return any(key == name or key.startswith(f"{name}(") for name in names)
+
+
+def candidate_sort_key(item: dict[str, Any]) -> tuple[int, int, str, str]:
+    source = source_key(item.get("source"))
+    priority = next((value for name, value in SOURCE_PRIORITY.items() if source == name or source.startswith(f"{name}(")), 20)
+    return (0 if item.get("isPdf") else 1, priority, source, str(item.get("url") or ""))
+
+
+def active_source_pairs(source_pairs: list[tuple[Callable[..., Any], str]]) -> list[tuple[Callable[..., Any], str]]:
+    return [(source_fn, label) for source_fn, label in source_pairs if not matches_source(label, SUPPRESSED_SOURCE_KEYS)]
+
 
 def clean_doi(value: str | None) -> str | None:
     if not value:
@@ -107,8 +133,9 @@ def normalize_route(route: Any) -> dict[str, Any] | None:
     parsed = urlparse(url.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
+    source = str(route.get("source") or "下载来源").strip()[:120] or "下载来源"
     return {
-        "source": str(route.get("source") or "下载来源").strip()[:120] or "下载来源",
+        "source": source,
         "url": url.strip(),
         "isPdf": route.get("isPdf") is True,
     }
@@ -124,6 +151,8 @@ def located_routes(request: dict[str, Any]) -> list[dict[str, Any]]:
     for raw_route in raw_routes:
         route = normalize_route(raw_route)
         if not route:
+            continue
+        if not route["isPdf"] or matches_source(route["source"], SUPPRESSED_SOURCE_KEYS | PUBLICATION_SOURCE_KEYS):
             continue
         # Different metadata providers often point to the same PDF URL. One
         # network attempt is enough; keeping duplicates would waste the queue
@@ -549,12 +578,7 @@ class ProbeRecorder:
 
     def candidates(self) -> list[dict[str, Any]]:
         with self._lock:
-            def candidate_key(item: dict[str, Any]) -> tuple[int, int, float]:
-                source = str(item.get("source") or "").lower()
-                priority = next((value for name, value in SOURCE_PRIORITY.items() if source == name or source.startswith(f"{name}(")), 20)
-                return (0 if item.get("isPdf") else 1, priority, float(item["foundAt"]))
-
-            return sorted(self._candidates, key=candidate_key)
+            return sorted(self._candidates, key=candidate_sort_key)
 
 
 def engine_log(message: str, level: str = "INFO") -> None:
@@ -681,7 +705,6 @@ def verify_pdf_candidates(
     verified: list[dict[str, Any]] = []
     unverified: list[dict[str, Any]] = []
     source_pages: list[dict[str, Any]] = []
-    candidate_order = {(item.get("source"), item.get("url")): index for index, item in enumerate(pdf_candidates)}
     pool = ThreadPoolExecutor(max_workers=min(len(pdf_candidates), 4))
     future_map = {
         pool.submit(verify_candidate_url, item, config, per_candidate_timeout): item
@@ -705,9 +728,8 @@ def verify_pdf_candidates(
                         "WARN",
                     )
             else:
-                # Link-first mode keeps every discovered URL visible. Probe
-                # failures are useful annotations, but must not hide a source
-                # that may still work in the user's browser.
+                # Classification below decides whether a failed probe is a
+                # manual candidate, a publication page, or an invalid link.
                 if checked.get("probeStatus") in {"blocked", "rejected"}:
                     source_pages.append(checked)
                 engine_log(
@@ -728,15 +750,58 @@ def verify_pdf_candidates(
             )
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
-    ordered = sorted(
-        verified + unverified,
-        key=lambda item: candidate_order.get((item.get("source"), item.get("url")), len(candidate_order)),
-    )
-    ordered_pages = sorted(
-        landing_candidates + source_pages,
-        key=lambda item: candidate_order.get((item.get("source"), item.get("url")), len(candidate_order)),
-    )
+    ordered = ordered_unique_candidates(verified + unverified)
+    ordered_pages = ordered_unique_candidates(landing_candidates + source_pages)
     return ordered, ordered_pages, len(verified), len(unverified)
+
+
+def ordered_unique_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in sorted(candidates, key=candidate_sort_key):
+        url = str(candidate.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        ordered.append(candidate)
+    return ordered
+
+
+def classify_located_candidates(
+    pdf_candidates: list[dict[str, Any]],
+    landing_candidates: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate direct PDFs from manual and publication-only routes."""
+    download_routes: list[dict[str, Any]] = []
+    manual_routes: list[dict[str, Any]] = []
+    publication_routes: list[dict[str, Any]] = []
+
+    for candidate in pdf_candidates + landing_candidates:
+        source = candidate.get("source")
+        probe_status = str(candidate.get("probeStatus") or "")
+        is_publication = matches_source(source, PUBLICATION_SOURCE_KEYS)
+        is_manual_source = matches_source(source, MANUAL_SOURCE_KEYS)
+
+        if matches_source(source, SUPPRESSED_SOURCE_KEYS):
+            engine_log(f"locate suppressed {source or 'source'} candidate", "WARN")
+            continue
+        if is_publication:
+            publication_routes.append(candidate)
+            continue
+        if candidate.get("isPdf") and probe_status == "verified":
+            download_routes.append(candidate)
+            continue
+        if probe_status in {"unverified", "blocked"} or (candidate.get("kind") == "landing" and is_manual_source):
+            manual_routes.append(candidate)
+            continue
+        if candidate.get("kind") == "landing":
+            publication_routes.append(candidate)
+
+    return (
+        ordered_unique_candidates(download_routes),
+        ordered_unique_candidates(manual_routes),
+        ordered_unique_candidates(publication_routes),
+    )
 
 
 class PatchSet:
@@ -829,7 +894,7 @@ def locate_sources(doi: str, request: dict[str, Any]) -> dict[str, Any]:
     )
     apply_source_limits(config, request, timeout_seconds)
 
-    source_pairs = _build_free_sources(doi, config)
+    source_pairs = active_source_pairs(_build_free_sources(doi, config))
     source_names = [label for _, label in source_pairs]
     recorder = ProbeRecorder()
     patches = PatchSet()
@@ -877,18 +942,21 @@ def locate_sources(doi: str, request: dict[str, Any]) -> dict[str, Any]:
         candidate.pop("foundAt", None)
     remaining_seconds = max(2.0, min(8.0, deadline - time.monotonic()))
     pdf_candidates, landing_candidates, verified_count, unverified_count = verify_pdf_candidates(raw_candidates, config, remaining_seconds)
-    candidates = pdf_candidates + landing_candidates
-    route = candidates[0] if candidates else None
+    download_routes, manual_routes, publication_routes = classify_located_candidates(pdf_candidates, landing_candidates)
+    route = download_routes[0] if download_routes else None
+    found_routes = bool(route or manual_routes or publication_routes)
     engine_log(
-        f"locate {doi}: {verified_count} verified PDF candidate(s), {unverified_count} unverified fallback(s), {len(landing_candidates)} source page(s)",
+        f"locate {doi}: {len(download_routes)} usable PDF route(s), {len(manual_routes)} manual candidate(s), "
+        f"{len(publication_routes)} publication route(s); probes={verified_count} verified/{unverified_count} unverified",
     )
     return {
-        "status": "found" if route else "not-found",
+        "status": "found" if found_routes else "not-found",
         "identifier": doi,
         "route": route,
-        # Keep the complete ordered queue so download can advance after a
-        # failed candidate instead of repeating the first URL.
-        "routes": candidates,
+        # Only verified PDF routes reach the application download queue.
+        "routes": download_routes,
+        "manualRoutes": manual_routes,
+        "publicationRoutes": publication_routes,
         "checkedSources": len(source_names),
         "totalSources": len(source_names) or DEFAULT_SOURCE_COUNT,
         "sourceNames": source_names,
@@ -1161,7 +1229,7 @@ def status() -> dict[str, Any]:
         from scansci_pdf.sources import _build_free_sources
 
         config = load_config().copy()
-        names = [label for _, label in _build_free_sources("10.0000/status", config)]
+        names = [label for _, label in active_source_pairs(_build_free_sources("10.0000/status", config))]
         return {"status": "ready", "sourceCount": len(names) or DEFAULT_SOURCE_COUNT, "sources": names}
     except Exception as exc:
         return {"status": "error", "error": str(exc), "sourceCount": DEFAULT_SOURCE_COUNT}

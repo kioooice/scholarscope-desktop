@@ -20,6 +20,7 @@ __pycache__/
 src-tauri/target/
 apps/desktop/src-tauri/target/
 *.local
+ScholarScope-web-linux-x64.zip
 
 # Editor directories and files
 .vscode/*

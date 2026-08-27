@@ -27,7 +27,7 @@ import { defaultProviderSettings, loadProviderSettings, saveProviderSettings } f
 import { scansciService, selectScanSciPapers, type ScanSciConnectionStatus } from "./services/scansciService";
 import { SearchSettingsPage, type SearchEngineStatus } from "./pages/SearchSettingsPage";
 import type { ProviderSettings, SearchFilters, SearchSource } from "./types/scholarscope";
-import type { ScanSciLookupState, SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
+import type { ScanSciLookupState, ScanSciRoute, SearchHistoryEntry, SearchSession, UnifiedPaper } from "./types/search";
 
 const defaultFilters: SearchFilters = {
   disciplines: [],
@@ -127,7 +127,10 @@ function scanSciLabel(state?: ScanSciLookupState): string | undefined {
   if (state.status === "checking") return "来源检索中";
   if (state.status === "found" && state.downloadStatus === "ready" && state.url?.startsWith("blob:")) return `${state.source || "下载来源"} · PDF 已就绪`;
   if (state.status === "found" && state.downloadStatus === "downloading") return `${state.source || "候选来源"} · 正在获取`;
-  if (state.status === "found") return `${state.source || "候选来源"} · 候选来源`;
+  if (state.status === "found" && (state.routes?.length ?? 0) > 0) return `${state.routes?.length} 个 PDF 候选`;
+  if (state.status === "found" && (state.manualRoutes?.length ?? 0) > 0) return `${state.manualRoutes?.length} 个手动候选`;
+  if (state.status === "found" && (state.publicationRoutes?.length ?? 0) > 0) return "出版页面已就绪";
+  if (state.status === "found") return "未找到可获取 PDF";
   if (state.status === "not-found") return "未找到来源链接";
   if (state.status === "unavailable") return "来源引擎未连接";
   if (state.status === "error") return "来源引擎失败";
@@ -141,7 +144,7 @@ function downloadLabel(state?: ScanSciLookupState): string {
   return "应用内获取 PDF";
 }
 
-type DownloadRoute = Pick<ScanSciLookupState, "source" | "url" | "isPdf" | "routeId">;
+type DownloadRoute = Pick<ScanSciRoute, "source" | "url" | "isPdf" | "routeId">;
 
 function PaperRow({ paper, active, onSelect, scanSciState }: { paper: UnifiedPaper; active: boolean; onSelect: () => void; scanSciState?: ScanSciLookupState }) {
   return (
@@ -175,14 +178,15 @@ function PaperPreview({ paper, scanSciState, downloadDirectory, onDownload }: { 
   }
 
   const publisherUrl = paper.publisherUrl || paper.sourceUrls.ScholarScope;
-  const scanSciUrl = scanSciState?.status === "found" ? scanSciState.url : undefined;
+  const downloadRoutes = scanSciState?.routes ?? [];
+  const manualRoutes = scanSciState?.manualRoutes ?? [];
+  const publicationRoutes = scanSciState?.publicationRoutes ?? [];
+  const activeDownloadRoute = downloadRoutes.find((route) => route.routeId === scanSciState?.routeId) || downloadRoutes[0];
+  const scanSciUrl = scanSciState?.status === "found" ? activeDownloadRoute?.url : undefined;
   const waitingForAccess = !scanSciState || scanSciState.status === "checking";
-  const downloadedUrl = scanSciState?.downloadStatus === "ready" && scanSciUrl?.startsWith("blob:") ? scanSciUrl : undefined;
+  const downloadedUrl = scanSciState?.downloadStatus === "ready" && scanSciState.url?.startsWith("blob:") ? scanSciState.url : undefined;
   const isDownloading = scanSciState?.downloadStatus === "downloading";
-  const verifiedPdfCandidate = scanSciState?.isPdf === true && scanSciState.probeStatus === "verified";
-  const alternativeRoutes = !downloadedUrl
-    ? (scanSciState?.routes ?? []).filter((route) => route.url && route.routeId && route.routeId !== scanSciState?.routeId).slice(0, 6)
-    : [];
+  const verifiedPdfCandidate = activeDownloadRoute?.isPdf === true && activeDownloadRoute.probeStatus === "verified";
   const abstract = paper.abstract;
 
   return (
@@ -225,63 +229,74 @@ function PaperPreview({ paper, scanSciState, downloadDirectory, onDownload }: { 
                 <SourceChip source={source} /><span>查看该平台记录</span><ArrowUpRight size={14} />
               </ExternalAction>
             ))}
+            {publicationRoutes.slice(0, 4).map((route) => (
+              <ExternalAction url={route.url!} key={`${route.source}:${route.url}`}>
+                <span className="source-chip">{route.source || "出版页面"}</span><span>查看出版页面</span><ArrowUpRight size={14} />
+              </ExternalAction>
+            ))}
           </div>
           {paper.mergeWarnings.map((warning) => <p className="warning-text" key={warning}>{warning}</p>)}
         </section>
 
         {scanSciState && (
           <section className="preview-section">
-            <div className="section-title"><Search size={17} /><h2>来源链接</h2></div>
-            {scanSciState.status === "checking" && <p className="muted abstract-status">正在并行整理来源链接…</p>}
-            {scanSciState.status === "found" && scanSciUrl && (
-              <div className="source-stack">
-                {downloadedUrl ? (
-                  <DownloadAction
-                    url={downloadedUrl}
-                    filename={paper.title}
-                    downloadDirectory={downloadDirectory}
-                    onClick={onDownload}
-                    disabled={isDownloading}
-                  >
-                    <span className="source-chip source-chip--scansci">{scanSciState.source || "下载来源"}</span>
-                    <span>{downloadLabel(scanSciState)}</span>
-                    {isDownloading ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}
-                  </DownloadAction>
-                ) : (
-                  <ExternalAction url={scanSciUrl}>
-                    <span className="source-chip source-chip--scansci">{scanSciState.source || "下载来源"}</span>
-                    <span>{scanSciState.probeStatus === "blocked" ? "打开来源页并直接下载" : "打开来源页"}</span>
-                    <ArrowUpRight size={14} />
-                  </ExternalAction>
+            <div className="section-title"><Search size={17} /><h2>获取来源</h2></div>
+            {scanSciState.status === "checking" && <p className="muted abstract-status">正在核验可获取的 PDF…</p>}
+            {scanSciState.status === "found" && (
+              <>
+                {downloadedUrl && (
+                  <div className="source-stack">
+                    <DownloadAction
+                      url={downloadedUrl}
+                      filename={paper.title}
+                      downloadDirectory={downloadDirectory}
+                      onClick={onDownload}
+                      disabled={isDownloading}
+                    >
+                      <span className="source-chip source-chip--scansci">{scanSciState.source || "下载来源"}</span>
+                      <span>{downloadLabel(scanSciState)}</span>
+                      <Download size={14} />
+                    </DownloadAction>
+                  </div>
                 )}
-                {!downloadedUrl && verifiedPdfCandidate && (
-                  <DownloadAction
-                    filename={paper.title}
-                    onClick={onDownload}
-                    disabled={isDownloading}
-                  >
-                    <span className="source-chip source-chip--scansci">{scanSciState.source || "下载来源"}</span>
-                    <span>{downloadLabel(scanSciState)}</span>
-                    {isDownloading ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}
-                  </DownloadAction>
+                {downloadRoutes.length > 0 && (
+                  <div className="source-stack">
+                    {downloadRoutes.slice(0, 6).map((route) => (
+                      <ExternalAction url={route.url!} key={route.routeId || `${route.source}:${route.url}`}>
+                        <span className="source-chip source-chip--scansci">{route.source || "PDF 来源"}</span><span>打开已验证 PDF</span><ArrowUpRight size={14} />
+                      </ExternalAction>
+                    ))}
+                    {!downloadedUrl && verifiedPdfCandidate && (
+                      <DownloadAction
+                        filename={paper.title}
+                        onClick={() => onDownload(activeDownloadRoute)}
+                        disabled={isDownloading}
+                      >
+                        <span className="source-chip source-chip--scansci">{activeDownloadRoute?.source || "下载来源"}</span>
+                        <span>{downloadLabel(scanSciState)}</span>
+                        {isDownloading ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}
+                      </DownloadAction>
+                    )}
+                  </div>
                 )}
-                {!downloadedUrl && !verifiedPdfCandidate && (
-                  <p className="muted abstract-status">
-                    {scanSciState.probeStatus === "blocked"
-                      ? "该来源受到访问验证保护，请在来源页完成验证并直接下载。"
-                      : "探测未确认可直接返回 PDF，已保留来源链接供浏览器打开。"}
-                  </p>
+                {manualRoutes.length > 0 && (
+                  <>
+                    <p className="muted abstract-status">手动获取候选</p>
+                    <div className="source-stack">
+                      {manualRoutes.slice(0, 6).map((route) => (
+                        <ExternalAction url={route.url!} key={`${route.source}:${route.url}`}>
+                          <span className="source-chip">{route.source || "候选来源"}</span><span>在浏览器中尝试获取</span><ArrowUpRight size={14} />
+                        </ExternalAction>
+                      ))}
+                    </div>
+                  </>
                 )}
-                {alternativeRoutes.map((route) => (
-                  <ExternalAction url={route.url!} key={route.routeId}>
-                    <span className={`source-chip${route.probeStatus === "verified" ? " source-chip--scansci" : ""}`}>{route.source || "来源页面"}</span>
-                    <span>{route.probeStatus === "blocked" ? "打开来源页并直接下载" : route.probeStatus === "verified" ? "打开已验证 PDF 来源" : "打开来源页"}</span>
-                    <ArrowUpRight size={14} />
-                  </ExternalAction>
-                ))}
-              </div>
+                {downloadRoutes.length === 0 && manualRoutes.length === 0 && (
+                  <p className="muted abstract-status">本次未找到可获取的 PDF，可查看出版页面核验。</p>
+                )}
+              </>
             )}
-            {scanSciState.status === "not-found" && <p className="muted abstract-status">已检查 {scanSciState.checkedSources ?? "多个"} 个来源，暂未找到可打开链接。</p>}
+            {scanSciState.status === "not-found" && <p className="muted abstract-status">已检查 {scanSciState.checkedSources ?? "多个"} 个来源，暂未找到可获取的 PDF。</p>}
             {scanSciState.status === "unavailable" && <p className="muted abstract-status">内部来源引擎尚未就绪。</p>}
             {scanSciState.status === "error" && <p className="muted abstract-status">内部来源引擎暂时失败：{scanSciState.error || "请稍后重试"}</p>}
             {scanSciState.downloadStatus === "error" && <p className="muted abstract-status">本次获取失败：{scanSciState.error || "请重试"}</p>}
@@ -292,8 +307,8 @@ function PaperPreview({ paper, scanSciState, downloadDirectory, onDownload }: { 
 
       <div className="preview-actions">
         {publisherUrl && <ExternalAction className="button button--primary" url={publisherUrl}>查看出版页面 <ExternalLink size={15} /></ExternalAction>}
-        {scanSciState?.status === "found" && scanSciUrl && !downloadedUrl && <ExternalAction className="button" url={scanSciUrl}>打开来源页 <ExternalLink size={15} /></ExternalAction>}
-        {scanSciState?.status === "found" && verifiedPdfCandidate && !downloadedUrl && <DownloadAction className="button" filename={paper.title} downloadDirectory={downloadDirectory} onClick={onDownload} disabled={isDownloading}>{downloadLabel(scanSciState)} <Download size={15} /></DownloadAction>}
+        {scanSciState?.status === "found" && scanSciUrl && !downloadedUrl && <ExternalAction className="button" url={scanSciUrl}>打开 PDF <ExternalLink size={15} /></ExternalAction>}
+        {scanSciState?.status === "found" && verifiedPdfCandidate && !downloadedUrl && <DownloadAction className="button" filename={paper.title} downloadDirectory={downloadDirectory} onClick={() => onDownload(activeDownloadRoute)} disabled={isDownloading}>{downloadLabel(scanSciState)} <Download size={15} /></DownloadAction>}
         {downloadedUrl && <DownloadAction className="button" url={downloadedUrl} filename={paper.title} downloadDirectory={downloadDirectory} onClick={onDownload} disabled={isDownloading}>{downloadLabel(scanSciState)} <Download size={15} /></DownloadAction>}
         {waitingForAccess && <span className="button button--pending">正在整理来源链接 <LoaderCircle className="spin" size={15} /></span>}
         {doiUrl(paper.doi) && <ExternalAction className="button" url={doiUrl(paper.doi)!}>打开 DOI <ExternalLink size={15} /></ExternalAction>}

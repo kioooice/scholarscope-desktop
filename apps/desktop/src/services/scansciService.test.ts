@@ -125,6 +125,26 @@ describe("integrated paper download engine", () => {
     expect(result.routes?.[1]).toMatchObject({ isPdf: true });
   });
 
+  it("keeps download, manual, and publication routes in separate groups", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      status: "found",
+      route: { source: "Unpaywall", url: "https://oa.example/paper.pdf", isPdf: true, probeStatus: "verified" },
+      routes: [{ source: "Unpaywall", url: "https://oa.example/paper.pdf", isPdf: true, probeStatus: "verified" }],
+      manualRoutes: [{ source: "LibGen", url: "https://mirror.example/article", isPdf: false, probeStatus: "blocked" }],
+      publicationRoutes: [{ source: "ElsevierBrowser", url: "https://publisher.example/article", isPdf: false }],
+      checkedSources: 13,
+      totalSources: 13,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await scansciService.searchPaper({ title: "Categorised paper", doi: "10.5555/scansci-categories" }, settings());
+
+    expect(result.routes).toMatchObject([{ source: "Unpaywall", isPdf: true, probeStatus: "verified" }]);
+    expect(result.manualRoutes).toMatchObject([{ source: "LibGen", probeStatus: "blocked" }]);
+    expect(result.publicationRoutes).toMatchObject([{ source: "ElsevierBrowser" }]);
+    expect(result.checkedSources).toBe(13);
+  });
+
   it("downloads only after the explicit download request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(pdfResponse());
     vi.stubGlobal("fetch", fetchMock);

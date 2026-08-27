@@ -1,0 +1,18 @@
+[Unit]
+Description=ScholarScope web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__SCHOLARSCOPE_ROOT__
+ExecStart=/usr/bin/env bash __SCHOLARSCOPE_ROOT__/start.sh --foreground
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Environment=SCHOLARSCOPE_DATA_DIR=__SCHOLARSCOPE_ROOT__/data
+Environment=SCANSCI_PDF_DATA_DIR=__SCHOLARSCOPE_ROOT__/data
+
+[Install]
+WantedBy=multi-user.target

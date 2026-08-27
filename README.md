@@ -86,6 +86,12 @@ npm run lint
 
 `.github/workflows/build-windows-portable.yml` 只有 `workflow_dispatch`，不会因为每次提交自动打包。需要发布便携包时，在 GitHub Actions 页面手动运行它。
 
+## Linux Web 包
+
+服务器版打包脚本为 `npm run package:web:linux`，生成 `ScholarScope-web-linux-x64.zip`。压缩包解压后直接包含 `app/`、`runtime/`、`data/`、`start.sh` 和 1Panel/OpenResty 配置说明；首次执行 `bash start.sh` 会在包内创建 Python 虚拟环境并安装引擎依赖。详细步骤见包内的 `README-deploy.md`。
+
+服务器版使用 Node 提供静态页面和 API，OpenResty 应反向代理到 `127.0.0.1:5180`，不能只把 `app/dist` 配成静态目录，否则搜索接口不会工作。首次启动需要服务器 Python 3.11+ 和可访问的 pip 索引；PDF 会通过浏览器下载，不支持选择访问者电脑上的服务器路径。
+
 ## 当前限制
 
 - 元数据接口采用并行兜底；题名无法解析到 DOI 时，来源池无法按 DOI 定位。
